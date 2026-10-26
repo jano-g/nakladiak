@@ -59,6 +59,7 @@ const parseISO = (s) => { const [y, m, d] = String(s).slice(0, 10).split('-').ma
 const fmtDate = (s) => { if (!s) return ''; const d = parseISO(s); return `${d.getDate()}. ${SK_MONTHS_GEN[d.getMonth()]}${d.getFullYear() !== new Date().getFullYear() ? ' ' + d.getFullYear() : ''}`; };
 const fmtDateShort = (s) => { if (!s) return ''; const d = parseISO(s); return `${d.getDate()}. ${d.getMonth() + 1}.`; };
 const fmtDT = (s) => { if (!s) return ''; const d = new Date(s); return `${d.getDate()}. ${d.getMonth() + 1}. ${d.getFullYear()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; };
+const fmtRel = (s) => { if (!s) return ''; const d = new Date(s), t = new Date(); const hm = `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`; const same = (a, b) => a.toDateString() === b.toDateString(); const y = new Date(t); y.setDate(t.getDate() - 1); return same(d, t) ? `dnes ${hm}` : same(d, y) ? `včera ${hm}` : fmtDT(s); };
 const fmtMonth = (ym) => { const [y, m] = ym.split('-').map(Number); return `${SK_MONTHS[m - 1][0].toUpperCase()}${SK_MONTHS[m - 1].slice(1)} ${y}`; };
 const monthLoc = (ym) => SK_MONTHS_LOC[Number(ym.split('-')[1]) - 1];
 const addMonths = (ym, n) => { let [y, m] = ym.split('-').map(Number); m += n; while (m > 12) { m -= 12; y++; } while (m < 1) { m += 12; y--; } return `${y}-${String(m).padStart(2, '0')}`; };
@@ -169,11 +170,11 @@ const TABS = [
 ];
 function renderNav() {
   const h = location.hash || '#/';
-  const n = (S.me?.pending?.documents || 0) + (S.me?.pending?.transactions || 0);
+  const n = (S.me?.pending?.documents || 0) + (S.me?.pending?.errors || 0);
   const badge = n ? el('span', { class: 'badge' }, n) : null;
   mount($('#tabbar'), TABS.map(([href, label, icon, act, extra]) => el('a', { href, class: (act(h) ? 'is-active ' : '') + (extra || ''), 'aria-label': label }, extra ? svg(icon) : null, el('span', { class: 'lbl' }, label), href === '#/documents' ? badge?.cloneNode(true) : null)));
   mount($('#nav-top'), TABS.filter(([, , , , extra]) => !extra).map(([href, label, , act]) => el('a', { href, class: act(h) ? 'is-active' : '' }, label, href === '#/documents' ? badge?.cloneNode(true) : null)),
-    el('a', { href: '#/upload', class: h.startsWith('#/upload') ? 'is-active' : '' }, 'Nahrať účet'));
+    el('a', { href: '#/upload', class: 'upload' + (h.startsWith('#/upload') ? ' is-active' : '') }, svg('plus'), 'Nahrať účet'));
   if (S.me) mount($('#top-right'), el('button', { class: 'avatar', title: S.me.user.name + ' · profil a nastavenia', 'aria-label': 'Profil a nastavenia', onclick: openUserMenu }, (S.me.user.name || '?').trim().charAt(0).toUpperCase()));
 }
 function openUserMenu() {
@@ -232,7 +233,7 @@ async function renderDashboard(month) {
   if (nPlaces) sentence.push((WORDS[nPlaces] || plural(nPlaces, 'domácnosť', 'domácnosti', 'domácností')) + '. ');
   if (d.total > 0) {
     sentence.push(el('span', {}, 'Podľa faktúr a platieb ', el('b', {}, fmtEur(byInvoice)), d.estimated > 0 ? [', odhad ', d.is_current ? 'do konca mesiaca ' : '', 'ďalších ', el('b', {}, fmtEur(d.estimated))] : null, '.'));
-    if (prev && prev.total > 0) { const pct = Math.round((d.total / prev.total - 1) * 100); sentence.push(` Oproti ${monthLoc(prev.month)} o ${Math.abs(pct)} % ${pct <= 0 ? 'menej' : 'viac'}.`); }
+    if (prev && prev.total > 0) { const pct = Math.round((d.total / prev.total - 1) * 100); sentence.push(d.is_current ? ` Odhad celého mesiaca je o ${Math.abs(pct)} % ${pct <= 0 ? 'nižší' : 'vyšší'} ako ${monthLoc(prev.month)}.` : ` Oproti ${monthLoc(prev.month)} o ${Math.abs(pct)} % ${pct <= 0 ? 'menej' : 'viac'}.`); }
   } else if (nPlaces) sentence.push(' Zatiaľ žiadne náklady v tomto mesiaci.');
   const pend = d.pending;
   const todo = [
@@ -240,8 +241,9 @@ async function renderDashboard(month) {
     pend.transactions ? el('a', { class: 'chip chip--soft', href: '#/transactions' }, `${plural(pend.transactions, 'platba', 'platby', 'platieb')} na zaradenie`) : null,
     pend.processing ? el('span', { class: 'chip chip--soft' }, el('span', { class: 'pill pill--run', style: { padding: 0, background: 'transparent' } }), `${plural(pend.processing, 'dokument sa číta', 'dokumenty sa čítajú', 'dokumentov sa číta')}`) : null,
     pend.errors ? el('a', { class: 'chip chip--warn', href: '#/documents' }, `${plural(pend.errors, 'dokument sa nedá', 'dokumenty sa nedajú', 'dokumentov sa nedá')} prečítať`) : null,
-    !S.me.claude_ready && S.me.user.is_admin ? el('a', { class: 'chip chip--warn', href: '#/settings/reading' }, 'Nastav kľúč Claude API, inak sa dokumenty nečítajú') : null,
   ];
+  const setupNote = !S.me.claude_ready && S.me.user.is_admin ? el('div', { class: 'alert alert--warn' }, 'Nastav kľúč Claude API, bez neho sa dokumenty neprečítajú. ', el('a', { href: '#/settings/reading' }, 'Nastaviť')) : null;
+  const cur = d.history.find((h) => h.month === month);
   const maxH = Math.max(1, ...d.history.map((h) => h.total));
   mount(main,
     el('div', { class: 'monthnav' },
@@ -250,19 +252,20 @@ async function renderDashboard(month) {
       el('button', { 'aria-label': 'Ďalší mesiac', onclick: () => { location.hash = '#/month/' + addMonths(month, 1); } }, '›'),
       month !== new Date().toISOString().slice(0, 7) ? el('a', { href: '#/', class: 'btn btn--sm btn--ghost' }, 'Dnes') : null),
     el('section', { class: 'hero' },
-      el('div', {},
-        el('h1', { class: 'num' }, fmtEur(d.total).replace(' €', ''), el('small', {}, '€')),
-        el('p', {}, ...sentence)),
-      todo.some(Boolean) ? el('div', { class: 'todo' }, ...todo) : null),
-    d.history.some((h) => h.total > 0) ? el('div', {},
-      el('div', { class: 'hist' }, ...d.history.map((h) => el('button', { class: h.month === month ? 'is-on' : '', title: `${fmtMonth(h.month)}: ${fmtEur(h.total)}`, 'aria-label': `${fmtMonth(h.month)}: ${fmtEur(h.total)}`, style: { height: Math.max(6, Math.round(h.total / maxH * 100)) + '%' }, onclick: () => { location.hash = '#/month/' + h.month; } }))),
-      el('div', { class: 'hist-l' }, ...d.history.map((h) => el('span', {}, h.label)))) : null,
+      el('h1', { class: 'num' }, fmtEur(d.total).replace(' €', ''), el('small', {}, '€')),
+      el('p', {}, ...sentence)),
+    setupNote,
+    todo.some(Boolean) ? el('div', { class: 'todo' }, ...todo) : null,
+    d.history.some((h) => h.total > 0) ? el('div', { class: 'histwrap' },
+      el('div', { class: 'hist' }, ...d.history.map((h) => el('button', { class: (h.month === month ? 'is-on' : '') + (h.month === d.today.slice(0, 7) ? ' is-now' : ''), title: `${fmtMonth(h.month)}: ${fmtEur(h.total)}`, 'aria-label': `${fmtMonth(h.month)}: ${fmtEur(h.total)}`, style: { height: Math.max(6, Math.round(h.total / maxH * 100)) + '%' }, onclick: () => { location.hash = '#/month/' + h.month; } }))),
+      el('div', { class: 'hist-l' }, ...d.history.map((h) => el('span', {}, h.label))),
+      el('div', { class: 'hist-cap' }, cur ? (d.is_current ? `${fmtMonth(month)} · zatiaľ ${fmtEur(cur.total)} podľa faktúr a platieb` : `${fmtMonth(month)} · ${fmtEur(cur.total)}`) : '')) : null,
     nPlaces ? el('section', { class: 'houses' }, ...d.places.map(houseNode)) :
       el('div', { class: 'empty', style: { marginTop: '16px' } }, el('p', {}, 'Zatiaľ tu nie je žiadne miesto. Začni bytom alebo domom, potom k nemu pridaj služby a nahraj prvý účet.'), el('a', { class: 'btn btn--primary', href: '#/places' }, 'Pridať prvé miesto')),
     d.due.length ? el('section', { class: 'section' }, el('h2', {}, 'Splatné'), el('div', { class: 'card' }, el('ul', { class: 'rows' }, ...d.due.map((i) =>
       el('a', { href: '#/documents/' + i.document_id },
-        el('span', { class: 'k' }, `${i.supplier || 'faktúra'}${i.service ? ' · ' + i.service : ''}${i.place ? ' · ' + i.place : ''}`, el('span', { class: 's' + (i.overdue ? ' pill--err' : '') , style: i.overdue ? { color: 'var(--err)' } : null }, i.overdue ? `po splatnosti (${fmtDate(i.due_at)})` : `do ${fmtDate(i.due_at)}`)),
-        el('span', { class: 'v' }, fmtEur(i.amount))))))) : null,
+        el('span', { class: 'k' }, [i.service, i.supplier, i.place || 'nepriradená'].filter(Boolean).join(' · '), el('span', { class: 's' }, i.overdue ? el('span', { class: 'pill pill--err' }, `po splatnosti, ${fmtDate(i.due_at)}`) : `do ${fmtDate(i.due_at)}`)),
+        el('span', { class: 'v', style: i.overdue ? { color: 'var(--err)' } : null }, fmtEur(i.amount))))))) : null,
   );
 }
 function houseNode(p) {
@@ -280,8 +283,8 @@ function houseNode(p) {
   const rows = [
     ...p.services.map((s) => el('a', { class: 'row', href: '#/services/' + s.id },
       el('span', { class: 'k' }, s.label, el('small', {}, [s.supplier, s.name && s.name !== s.supplier ? s.name : null, s.source === 'odhad' ? (s.how === 'zaloha' ? (FLAT.has(s.kind) ? 'paušál' : 'záloha') : 'odhad') : null].filter(Boolean).join(' · ')),
-        s.source === 'odhad' && s.consumption != null ? el('span', { class: 'sub' }, `${fmtNum(s.consumption, 0)} ${s.unit}${s.how === 'bez_ceny' ? ' · doplň cenu za jednotku' : ''}`) : null),
-      s.amount != null ? el('span', { class: 'v' + (s.source === 'odhad' ? ' est' : '') }, fmtEur(s.amount)) : el('span', { class: 'v none' }, s.source === 'odhad' ? 'bez ceny' : 'bez faktúry'))),
+        s.source === 'odhad' && s.consumption != null ? el('span', { class: 'sub' }, `${s.month && s.month.days ? `zatiaľ ${fmtNum(s.month.value, 0)} ${s.unit}, odhad ${fmtNum(s.consumption, 0)} ${s.unit}` : `${fmtNum(s.consumption, 0)} ${s.unit}`}${s.how === 'bez_ceny' ? ' · doplň cenu za jednotku' : ''}`) : null),
+      s.amount != null ? el('span', { class: 'v' + (s.source === 'odhad' ? ' est' : '') }, fmtEur(s.amount)) : el('span', { class: 'v none' }, s.source === 'odhad' ? 'bez ceny' : 'zatiaľ bez faktúry'))),
     ...p.other.map((c) => el('a', { class: 'row', href: c.document_id ? '#/documents/' + c.document_id : '#/places/' + p.id },
       el('span', { class: 'k' }, c.label, el('small', {}, [c.counterparty, c.kind === 'prevod' ? 'prevod' : c.kind === 'uctenka' ? 'účtenka' : null].filter(Boolean).join(' · '))),
       el('span', { class: 'v' }, fmtEur(c.amount)))),
@@ -299,8 +302,8 @@ function renderUpload() {
   const main = $('#main');
   const fileIn = el('input', { type: 'file', accept: 'application/pdf,image/*', multiple: true, id: 'file-in' });
   const camIn = el('input', { type: 'file', accept: 'image/*', capture: 'environment', id: 'cam-in' });
-  const kind = select('kind', S.meta.doc_kinds, 'auto');
-  const place = select('place_id', placeOptions('— appka určí sama —'), '');
+  const kind = select('kind', S.meta.doc_kinds.map((k) => k.id === 'auto' ? { id: 'auto', label: 'Rozhodne appka' } : k), 'auto');
+  const place = select('place_id', placeOptions('Určí appka'), '');
   const hint = el('textarea', { name: 'hint', placeholder: 'napr. „účtenka za kosačku, dom v Belej“ (nepovinné)' });
   const results = el('div', { class: 'section' });
   const drop = el('div', { class: 'drop' },
@@ -317,7 +320,7 @@ function renderUpload() {
   ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('is-over'); }));
   drop.addEventListener('drop', (e) => onFiles([...e.dataTransfer.files]));
   const form = el('form', { onsubmit: (e) => e.preventDefault() },
-    el('div', { class: 'grid2' }, field('Čo to je', kind, 'Nechaj na appku, rozpozná faktúru, účtenku aj výpis.'), field('Miesto', place, 'Len ak to appka nevie určiť z dokumentu.')),
+    el('div', { class: 'grid2 grid2--stack' }, field('Čo to je', kind, 'Appka rozpozná faktúru, účtenku aj výpis.'), field('Miesto', place, 'Len ak to appka nevie určiť z dokumentu.')),
     field('Poznámka pre čítanie', hint));
   mount(main,
     el('div', { class: 'page-h' }, el('h1', {}, 'Nahrať účet'), S.me.mailbox_ready ? el('span', { class: 'pill pill--ok' }, 'schránka beží') : null),
@@ -357,7 +360,7 @@ function docCard(d, wide = false) {
     svg(d.mime === 'application/pdf' ? 'doc' : 'camera', 'ico'),
     el('div', { style: { minWidth: 0, flex: 1 } },
       el('div', { class: 't' }, d.summary || d.filename),
-      el('div', { class: 'm' }, [DOC_KIND[d.doc_kind || d.kind] !== 'Nerozhodnuté' ? DOC_KIND[d.doc_kind || d.kind] : null, place?.name, fmtDT(d.received_at), SOURCE[d.source]].filter(Boolean).join(' · ')),
+      el('div', { class: 'm' }, [DOC_KIND[d.doc_kind || d.kind] !== 'Nerozhodnuté' ? DOC_KIND[d.doc_kind || d.kind] : null, place?.name, `${SOURCE[d.source] || 'nahrané'} ${fmtRel(d.received_at)}`].filter(Boolean).join(' · ')),
       d.status === 'error' ? el('div', { class: 'm', style: { color: 'var(--err)' } }, d.error) : null),
     el('span', { class: cls + ' st' }, lbl));
 }
@@ -398,7 +401,7 @@ async function renderDocument(id) {
     const place = placeById(d.place_id);
     const svc = d.service_id;
     mount(main,
-      el('div', { class: 'page-h' }, el('div', {}, el('h1', {}, d.summary || d.filename), el('div', { class: 'sub' }, [d.filename, fmtBytes(d.size), SOURCE[d.source], d.mail_from ? `od ${d.mail_from}` : null, fmtDT(d.received_at)].filter(Boolean).join(' · '))), el('span', { class: cls }, lbl)),
+      el('div', { class: 'page-h' }, el('div', {}, el('h1', {}, d.summary || d.filename), el('div', { class: 'sub' }, [d.filename, fmtBytes(d.size), `${SOURCE[d.source] || 'nahrané'} ${fmtDT(d.received_at)}`, d.mail_from ? `od ${d.mail_from}` : null].filter(Boolean).join(' · '))), el('span', { class: cls }, lbl)),
       d.status === 'error' ? el('div', { class: 'alert alert--err' }, d.error, d.attempts >= 4 ? ' Skúsi sa znova len na požiadanie.' : ' Skúsi sa znova automaticky.') : null,
       d.status === 'needs_review' ? el('div', { class: 'card' }, el('h3', { style: { marginBottom: '8px' } }, 'Kam to patrí?'), el('p', { class: 'sub', style: { marginBottom: '10px' } }, data.doc_kind === 'faktura' ? 'Appka si nie je istá, ktorej službe faktúra patrí. Vyber ju a nabudúce to už bude vedieť.' : data.doc_kind === 'uctenka' ? 'Vyber miesto a kategóriu. Rovnaký obchod nabudúce zaradí sama.' : 'Povedz appke, čo to je a kam to patrí.'), reviewForm(d, (nd) => { d = nd; draw(); loadMe(); })) : null,
       facts.length ? el('div', { class: 'card', style: { marginTop: '10px' } }, el('dl', { class: 'kv' }, ...facts.map(([k, v]) => [el('dt', {}, k), el('dd', {}, v)]))) : null,
@@ -427,17 +430,18 @@ async function renderDocument(id) {
 function reviewForm(d, onDone) {
   const data = d.data || {};
   const kindSel = select('kind', [{ id: 'faktura', label: 'Faktúra / vyúčtovanie' }, { id: 'uctenka', label: 'Účtenka' }, { id: 'vypis', label: 'Výpis z účtu' }, { id: 'ine', label: 'Iné (bez nákladu)' }], data.doc_kind || 'ine');
-  const placeSel = select('place_id', placeOptions(), d.place_id || d.suggested_place_id || '');
-  const svcSel = select('service_id', [{ id: '', label: '— bez služby —' }], d.service_id || d.suggested_service_id || '');
-  const catSel = select('category', [{ id: '', label: '— kategória —' }, ...S.meta.categories], (data.receipt && data.receipt.category_hint) || '');
-  const remember = check('remember', 'Zapamätať si to', true, 'Nabudúce rovnaký dodávateľ alebo obchod pôjde bez pýtania.');
-  const svcWrap = field('Služba', svcSel, 'Pri faktúre povinné: elektrina, plyn, voda… na danom mieste.');
+  const placeSel = select('place_id', placeOptions('Vyber miesto'), d.place_id || d.suggested_place_id || '');
+  const svcSel = select('service_id', [{ id: '', label: 'Bez služby' }], d.service_id || d.suggested_service_id || '');
+  const catSel = select('category', [{ id: '', label: 'Vyber kategóriu' }, ...S.meta.categories], (data.receipt && data.receipt.category_hint) || '');
+  const who = data.supplier || (data.receipt && data.receipt.merchant) || '';
+  const remember = check('remember', 'Zapamätať si to', true, who ? `Nabudúce ${who} zaradí appka sama.` : 'Nabudúce rovnaký dodávateľ alebo obchod zaradí appka sama.');
+  const svcWrap = field('Služba', svcSel, 'Pri faktúre vyber službu na tom mieste (elektrina, plyn, voda…).');
   const catWrap = field('Kategória', catSel);
   async function fillServices() {
     const pid = placeSel.value;
-    let opts = [{ id: '', label: '— bez služby —' }];
+    let opts = [{ id: '', label: 'Bez služby' }];
     if (pid) { const p = (await GET('/api/places/' + pid)); opts = opts.concat(p.services.filter((s) => s.active).map((s) => ({ id: s.id, label: `${s.kind_label}${s.supplier ? ' · ' + s.supplier : ''}${s.label ? ' (' + s.label + ')' : ''}` }))); }
-    const cur = svcSel.value || d.suggested_service_id || '';
+    const cur = svcSel.value || d.service_id || d.suggested_service_id || '';
     mount(svcSel, ...opts.map((o) => el('option', { value: o.id, selected: String(o.id) === String(cur) }, o.label)));
   }
   const refresh = () => { const k = kindSel.value; svcWrap.hidden = !(k === 'faktura' || k === 'uctenka'); catWrap.hidden = k !== 'uctenka' && k !== 'ine'; };
@@ -447,7 +451,8 @@ function reviewForm(d, onDone) {
   const form = el('form', { onsubmit: (e) => { e.preventDefault(); submitForm(form, async (v) => { const nd = await POST(`/api/documents/${d.id}/review`, { kind: v.kind, place_id: v.place_id || null, service_id: v.service_id || null, category: v.category || '', remember: v.remember }); toast('Priradené'); onDone(nd); }); } },
     field('Čo to je', kindSel), field('Miesto', placeSel), svcWrap, catWrap, remember,
     el('div', { class: 'row-btns' }, el('button', { class: 'btn btn--primary', type: 'submit' }, svg('check'), 'Potvrdiť')));
-  if (d.suggested_service_id && d.match_confidence) form.prepend(el('div', { class: 'alert' }, `Návrh appky: istota ${Math.round(d.match_confidence * 100)} %. Skontroluj a potvrď.`));
+  if (d.suggestion) form.prepend(el('div', { class: 'alert' }, el('b', {}, 'Appka navrhuje: '), d.suggestion, d.match_confidence ? `. Istota ${Math.round(d.match_confidence * 100)} %, skontroluj.` : '.'));
+  else if (d.status === 'needs_review') form.prepend(el('div', { class: 'alert' }, data.doc_kind === 'faktura' ? 'Appka nevie určiť službu. Vyber ju.' : 'Appka nevie určiť miesto. Vyber ho.'));
   return form;
 }
 function reprocessForm(d) {
@@ -463,7 +468,7 @@ function txNode(t, onChange) {
   const st = { pending: ['na zaradenie', 'pill pill--warn'], assigned: ['zaradená', 'pill pill--ok'], invoice: ['platba faktúry', 'pill pill--ok'], ignored: ['ignorovaná', 'pill'] }[t.status] || [t.status, 'pill'];
   return el('div', { class: 'tx' },
     el('div', {}, el('div', { class: 'who' }, t.counterparty || t.note || 'bez názvu'), el('div', { class: 'm' }, [fmtDate(t.date), t.note && t.counterparty ? t.note : null, t.variable_symbol ? 'VS ' + t.variable_symbol : null].filter(Boolean).join(' · '))),
-    el('div', { class: 'amt' }, fmtEur(t.amount), el('div', {}, el('span', { class: st[1] }, st[0]))),
+    el('div', { class: 'amt' }, t.amount > 0 ? el('span', { style: { color: 'var(--ok)' } }, '+' + fmtEur(t.amount)) : fmtEur(Math.abs(t.amount)), t.status !== 'pending' ? el('div', {}, el('span', { class: st[1] }, st[0])) : null),
     t.status === 'pending' ? el('div', { class: 'act' },
       el('button', { class: 'btn btn--sm btn--primary', onclick: () => openSheet('Zaradiť platbu', assignForm(t, onChange)) }, 'Zaradiť'),
       el('button', { class: 'btn btn--sm btn--ghost', onclick: async () => { try { await POST(`/api/transactions/${t.id}/assign`, { ignore: true, remember: true }); toast('Platba sa bude ignorovať'); onChange(); } catch (e) { toast(e.message, true); } } }, 'Ignorovať')) : null);
@@ -478,10 +483,10 @@ function assignForm(t, onDone) {
     mount(svcSel, ...opts.map((o) => el('option', { value: o.id }, o.label)));
   });
   const form = el('form', { onsubmit: (e) => { e.preventDefault(); submitForm(form, async (v) => { await POST(`/api/transactions/${t.id}/assign`, { place_id: v.place_id || null, service_id: v.service_id || null, category: v.category, label: v.label, remember: v.remember }); closeSheet(); toast('Platba zaradená'); onDone(); loadMe(); }); } },
-    el('div', { class: 'card', style: { marginBottom: '12px' } }, el('b', {}, t.counterparty || t.note), el('div', { class: 'sub' }, `${fmtEur(t.amount)} · ${fmtDate(t.date)}${t.counterparty_iban ? ' · ' + t.counterparty_iban : ''}`)),
+    el('div', { class: 'card', style: { marginBottom: '12px' } }, el('b', {}, t.counterparty || t.note), el('div', { class: 'sub' }, `${fmtEur(Math.abs(t.amount))} · ${fmtDate(t.date)}${t.counterparty_iban ? ' · ' + t.counterparty_iban : ''}`)),
     field('Miesto', placeSel), field('Služba (nepovinné)', svcSel, 'Ak je to platba za službu, ktorú už sleduješ cez faktúry, appka ju nebude počítať dvakrát.'),
     field('Kategória', catSel), field('Pomenovanie', input('label', t.counterparty || '', { placeholder: 'napr. Peter, kosenie' })),
-    check('remember', 'Zapamätať si to', true, 'Ďalšie platby tejto protistrane (podľa IBAN alebo názvu) sa zaradia samy.'),
+    check('remember', 'Zapamätať si to', true, `Nabudúce ${t.counterparty || 'túto protistranu'} zaradí appka sama (podľa IBAN alebo názvu).`),
     el('div', { class: 'row-btns' }, el('button', { class: 'btn btn--primary', type: 'submit' }, svg('check'), 'Zaradiť'), el('button', { class: 'btn btn--ghost', type: 'button', onclick: closeSheet }, 'Zrušiť')));
   return form;
 }
@@ -502,7 +507,7 @@ async function renderPlaces() {
     r.places.length ? el('section', { class: 'houses' }, ...r.places.map((p) => el('article', { class: 'house', style: { '--c': p.color } },
       el('a', { class: 'house__h', href: '#/places/' + p.id }, el('h2', {}, p.name), el('span', { class: 'note' }, p.kind_label)),
       el('div', { class: 'note' }, p.address || ''),
-      el('div', { class: 'list' }, ...(p.services.length ? p.services.map((s) => el('a', { class: 'row', href: '#/services/' + s.id }, el('span', { class: 'k' }, s.kind_label, el('small', {}, [s.supplier, s.label].filter(Boolean).join(' · '))), el('span', { class: 'v' }, s.connector ? el('span', { class: 'pill' }, 'ZSD') : s.monthly_estimate ? fmtEur(s.monthly_estimate) + '/mes.' : '')))
+      el('div', { class: 'list' }, ...(p.services.length ? p.services.map((s) => el('a', { class: 'row', href: '#/services/' + s.id }, el('span', { class: 'k' }, s.kind_label, el('small', {}, [s.supplier, s.label].filter(Boolean).join(' · '))), el('span', { class: 'v' }, s.connector ? el('span', { class: 'pill' }, 'ZSD dáta') : s.monthly_estimate ? fmtEur(s.monthly_estimate) + '/mes.' : el('span', { class: 'muted', style: { fontWeight: 500 } }, 'podľa faktúr'))))
         : [el('a', { class: 'row', href: '#/places/' + p.id }, el('span', { class: 'k muted' }, 'Zatiaľ bez služieb'), el('span', { class: 'v' }, '+'))]))))) :
       el('div', { class: 'empty' }, el('p', {}, 'Miesto je byt, dom alebo chalupa. Ku každému patria služby: elektrina, plyn, voda, internet…'), el('button', { class: 'btn btn--primary', onclick: () => openSheet('Nové miesto', placeForm(null, () => { closeSheet(); loadMe().then(renderPlaces); })) }, 'Pridať prvé miesto')));
 }
@@ -536,14 +541,14 @@ async function renderPlace(id) {
         el('section', { class: 'section' }, el('h2', {}, 'Náklady za 12 mesiacov'),
           el('div', { class: 'card' },
             el('div', { class: 'months' }, ...p.months.map((m) => el('a', { href: '#/month/' + m.month, title: `${fmtMonth(m.month)}: ${fmtEur(m.by_place[String(id)] || 0)}`, class: m.month === S.month ? 'is-on' : '', style: { height: Math.max(4, Math.round((m.by_place[String(id)] || 0) / Math.max(1, ...p.months.map((x) => x.by_place[String(id)] || 0)) * 100)) + '%' } }))),
-            el('div', { class: 'hist-l' }, ...p.months.map((m) => el('span', {}, m.label)))))),
+            el('div', { class: 'hist-l' }, ...p.months.map((m) => el('span', {}, m.label))))),
+        p.documents.length ? el('section', { class: 'section' }, el('h2', {}, 'Dokumenty'), ...p.documents.slice(0, 10).map((d) => docCard(d))) : null),
       el('div', {},
         el('section', { class: 'section', style: { marginTop: 0 } }, el('h2', {}, 'Posledné výdavky', el('button', { class: 'btn btn--sm', onclick: () => openSheet('Výdavok ručne', costForm(p, () => { closeSheet(); renderPlace(id); })) }, svg('plus'), 'Ručne')),
           p.costs.length ? el('div', { class: 'card' }, el('ul', { class: 'rows' }, ...p.costs.slice(0, 30).map((c) => el('li', {},
             el('span', { class: 'k' }, catLabel(c.category), el('span', { class: 's' }, [c.counterparty, { faktura: 'faktúra', uctenka: 'účtenka', prevod: 'prevod', rucne: 'ručne' }[c.kind], fmtDate(c.date)].filter(Boolean).join(' · '))),
             el('span', { class: 'v' }, fmtEur(c.amount), c.kind === 'rucne' ? el('button', { class: 'iconbtn', style: { width: '32px', height: '32px' }, 'aria-label': 'Zmazať', onclick: async () => { if (await confirmSheet('Zmazať výdavok?', `${catLabel(c.category)} ${fmtEur(c.amount)}`, 'Zmazať', true)) { await DEL('/api/costs/' + c.id); renderPlace(id); } } }, svg('trash')) : null))))) :
-            el('div', { class: 'empty' }, el('p', {}, 'Zatiaľ žiadne výdavky. Nahraj účet alebo pridaj výdavok ručne.'))),
-        p.documents.length ? el('section', { class: 'section' }, el('h2', {}, 'Dokumenty'), ...p.documents.slice(0, 10).map((d) => docCard(d))) : null)));
+            el('div', { class: 'empty' }, el('p', {}, 'Zatiaľ žiadne výdavky. Nahraj účet alebo pridaj výdavok ručne.'))))));
 }
 function costForm(p, onDone) {
   const form = el('form', { onsubmit: (e) => { e.preventDefault(); submitForm(form, async (v) => { await POST('/api/costs', { place_id: p.id, service_id: v.service_id || null, amount: v.amount, category: v.category, date: v.date, counterparty: v.counterparty, note: v.note }); toast('Výdavok pridaný'); onDone(); }); } },
@@ -594,7 +599,7 @@ async function renderService(id) {
             s.unit_price ? [el('dt', {}, 'Cena'), el('dd', {}, `${fmtNum(s.unit_price, 4)} €/${s.unit}${s.fixed_monthly ? ` + ${fmtEur(s.fixed_monthly)} mesačne` : ''}`)] : null)) : null,
         s.connector ? el('section', { class: 'section' }, el('h2', {}, 'Spotreba po dňoch'),
           el('div', { class: 'card', style: { '--c': place.color } },
-            days.length ? [el('div', { class: 'bars' }, ...days.map((d) => el('div', { class: 'b' + (d.consumption == null ? ' none' : ''), title: `${fmtDate(d.date)}: ${fmtNum(d.consumption)} ${s.unit || 'kWh'}${d.generation != null ? ` · dodávka ${fmtNum(d.generation)}` : ''}` },
+            days.length ? [el('div', { class: 'bars' }, ...days.map((d) => el('div', { class: 'b' + (d.consumption == null ? ' none' : ''), title: `${fmtDate(d.date)}: ${fmtNum(d.consumption)} ${s.unit || 'kWh'}${d.generation != null ? ` · ${fmtNum(d.generation)} do siete` : ''}`, tabindex: 0, onclick: (e) => toast(e.currentTarget.title) },
                 el('i', { style: { height: Math.max(2, Math.round((d.consumption || 0) / mx * 100)) + '%' } }),
                 d.generation != null ? el('i', { class: 'gen', style: { height: Math.max(1, Math.round(d.generation / mx * 100)) + '%' } }) : null))),
               el('div', { class: 'bars-l' }, ...days.map((d, i) => el('span', {}, i % 7 === 0 ? fmtDateShort(d.date) : ''))),
@@ -670,13 +675,14 @@ async function settingsSources() {
     el('p', { class: 'sub', style: { marginBottom: '12px' } }, '15-minútové dáta elektriny (odber aj dodávka do siete) pre všetky odberné miesta jedného konta. Prihlásenie chráni reCAPTCHA, rieši ju služba 2captcha.com. Po prvom stiahnutí sa pri službách objaví zoznam odberných miest na priradenie.'),
     last ? el('div', { class: last.ok ? 'alert alert--ok' : 'alert alert--err' }, `${fmtDT(last.started_at)}: ${last.message}${last.finished_at ? '' : ' (beží)'}`) : null,
     settingsForm(st, el('div', {},
-      el('div', { class: 'grid2' }, field('Prihlasovacie meno', input('zsd_user', sv.zsd_user.value)), secretField('Heslo', 'zsd_password', st)),
-      el('div', { class: 'grid2' }, field('Business partner ID', input('zsd_business_partner_id', sv.zsd_business_partner_id.value), 'Rovnaké ako v spotreba_bela (.env).'), secretField('2captcha API kľúč', 'twocaptcha_api_key', st)),
+      el('div', { class: 'grid2' }, field('Prihlasovacie meno', input('zsd_user', sv.zsd_user.value, { placeholder: 'nenastavené' })), secretField('Heslo', 'zsd_password', st)),
+      el('div', { class: 'grid2' }, field('Business partner ID', input('zsd_business_partner_id', sv.zsd_business_partner_id.value, { placeholder: 'nenastavené' }), 'Rovnaké ako v starom spotreba_bela .env.'), secretField('2captcha API kľúč', 'twocaptcha_api_key', st)),
       el('div', { class: 'grid2' }, field('Čas denného sťahovania', input('zsd_time', sv.zsd_time.value, { placeholder: '14:35' }), 'Dáta za včerajšok sú na portáli po 14:00.'), check('zsd_enabled', 'Sťahovať denne', sv.zsd_enabled.value === '1')))),
     el('div', { class: 'row-btns' },
       el('button', { class: 'btn btn--sm btn--primary', disabled: !cs.zsd.configured, onclick: async (e) => { e.target.disabled = true; try { const r = await POST('/api/connectors/zsd/run', { days: 8 }); toast(r.message); } catch (err) { toast(err.message, true); } finally { e.target.disabled = false; } } }, svg('bolt'), 'Stiahnuť teraz (8 dní)'),
-      el('button', { class: 'btn btn--sm', disabled: !cs.zsd.configured, onclick: async (e) => { e.target.disabled = true; try { const r = await POST('/api/connectors/zsd/run', { days: 60 }); toast(r.message); } catch (err) { toast(err.message, true); } finally { e.target.disabled = false; } } }, 'Dotiahnuť 60 dní')),
-    cs.zsd.delivery_points.length ? el('section', { class: 'section' }, el('h2', {}, `Odberné miesta na portáli (${cs.zsd.delivery_points.length})`), el('div', { class: 'card' }, el('ul', { class: 'rows' }, ...cs.zsd.delivery_points.map((d) => el('li', {}, el('span', { class: 'k' }, d.eic || d.id, el('span', { class: 's' }, [d.address, d.name, 'ID ' + d.id].filter(Boolean).join(' · '))))))), el('p', { class: 'sub', style: { marginTop: '8px' } }, `Priradené služby: ${cs.zsd.mapped}. Priradenie sa robí pri službe (Miesta → služba → Upraviť → Zdroj dát).`)) : null,
+      el('button', { class: 'btn btn--sm', disabled: !cs.zsd.configured, onclick: async (e) => { e.target.disabled = true; try { const r = await POST('/api/connectors/zsd/run', { days: 60 }); toast(r.message); } catch (err) { toast(err.message, true); } finally { e.target.disabled = false; } } }, 'Dotiahnuť 60 dní'),
+      !cs.zsd.configured ? el('span', { class: 'sub', style: { alignSelf: 'center' } }, 'Najprv ulož prihlasovacie údaje, business partner ID a 2captcha kľúč.') : null),
+    cs.zsd.delivery_points.length ? el('section', { class: 'section' }, el('h2', {}, `Odberné miesta na portáli (${cs.zsd.delivery_points.length})`), el('div', { class: 'card' }, el('ul', { class: 'rows' }, ...cs.zsd.delivery_points.map((d) => el('li', {}, el('span', { class: 'k' }, d.eic || d.id, el('span', { class: 's' }, [d.address, d.name, 'ID ' + d.id].filter(Boolean).join(' · '))))))), el('p', { class: 'sub', style: { marginTop: '8px' } }, `Priradené služby: ${cs.zsd.mapped}. `, el('a', { href: '#/places' }, 'Priradiť pri službe'), ' (Upraviť službu → Zdroj dát).')) : null,
     cs.runs.length ? el('section', { class: 'section' }, el('h2', {}, 'Posledné behy'), el('div', { class: 'card' }, el('ul', { class: 'rows' }, ...cs.runs.slice(0, 10).map((r) => el('li', {}, el('span', { class: 'k' }, fmtDT(r.started_at), el('span', { class: 's' }, r.message || '…')), el('span', { class: r.ok == null ? 'pill pill--run' : r.ok ? 'pill pill--ok' : 'pill pill--err' }, r.ok == null ? 'beží' : r.ok ? 'ok' : 'chyba')))))) : null);
 }
 async function settingsRules() {
@@ -767,9 +773,9 @@ async function renderProfile() {
   const p = await GET('/api/profile');
   const form = el('form', { onsubmit: (e) => { e.preventDefault(); submitForm(form, async (v) => { await PUT('/api/profile', { name: v.name, email: v.email, ntfy_topic: v.ntfy_topic, notify_ntfy: v.notify_ntfy, notify_email: v.notify_email }); toast('Uložené'); loadMe(); }); } },
     field('Meno', input('name', p.name, { required: true })), field('E-mail', input('email', p.email, { type: 'email' }), 'Na obnovu hesla a upozornenia e-mailom.'),
-    field('ntfy téma', input('ntfy_topic', p.ntfy_topic, { placeholder: 'napr. nakladiak-jano-x7k2' }), `V appke ntfy sa prihlás na odber tejto témy (server ${p.ntfy_server}). Vyber si ťažko uhádnuteľnú.`),
+    field('ntfy téma', input('ntfy_topic', p.ntfy_topic, { placeholder: 'napr. nakladiak-jano-x7k2' }), 'Tému si pridaj v appke ntfy. Vyber ťažko uhádnuteľnú.'),
     check('notify_ntfy', 'Upozornenia cez ntfy', p.notify_ntfy, 'Nový spracovaný dokument, faktúra pred splatnosťou, týždenná spotreba, pripomienka na výpis.'),
-    check('notify_email', 'Upozornenia aj e-mailom', p.notify_email),
+    check('notify_email', 'Upozornenia aj e-mailom', p.notify_email, p.email ? `Rovnaké upozornenia pôjdu aj na ${p.email}.` : 'Najprv vyplň e-mail.'),
     el('div', { class: 'row-btns' }, el('button', { class: 'btn btn--primary', type: 'submit' }, 'Uložiť'), await testBtn('Poslať skúšobnú notifikáciu', 'ntfy', () => ({ topic: form.querySelector('input[name=ntfy_topic]').value }))));
   const pw = el('form', { onsubmit: (e) => { e.preventDefault(); submitForm(pw, async (v) => { if (v.new !== v.new2) throw new Error('Nové heslá sa nezhodujú.'); await POST('/api/profile/password', { current: v.current, new: v.new }); toast('Heslo zmenené, ostatné zariadenia sú odhlásené'); pw.reset(); }); } },
     field('Súčasné heslo', input('current', '', { type: 'password', autocomplete: 'current-password', required: true })),

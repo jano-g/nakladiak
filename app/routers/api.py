@@ -316,6 +316,15 @@ def _doc_out(d: dict, full: bool = False) -> dict:
         o["data"] = {k: v for k, v in data.items() if not k.startswith("_")}
         o["suggested_service_id"] = data.get("matched_service_id")
         o["suggested_place_id"] = data.get("matched_place_id")
+        if o["suggested_service_id"] and not o["suggested_place_id"]:
+            s = db.q1("SELECT place_id FROM services WHERE id=?", (o["suggested_service_id"],))
+            o["suggested_place_id"] = s["place_id"] if s else None
+        if o["suggested_service_id"]:
+            s = db.q1("SELECT s.kind, s.supplier, s.label, p.name place_name FROM services s JOIN places p ON p.id=s.place_id WHERE s.id=?", (o["suggested_service_id"],))
+            o["suggestion"] = f"{s['place_name']} · {SERVICE_LABELS.get(s['kind'], s['kind'])}{' (' + s['supplier'] + ')' if s['supplier'] else ''}" if s else None
+        elif o["suggested_place_id"]:
+            p = db.q1("SELECT name FROM places WHERE id=?", (o["suggested_place_id"],))
+            o["suggestion"] = p["name"] if p else None
         o["match_confidence"] = data.get("match_confidence")
     if full:
         o["invoice"] = _invoice_out(db.row(db.q1("SELECT * FROM invoices WHERE document_id=?", (d["id"],)))) if db.q1("SELECT 1 FROM invoices WHERE document_id=?", (d["id"],)) else None
