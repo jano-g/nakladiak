@@ -1,6 +1,6 @@
 # Nakladiak
 
-Náklady domácností (byt, dom v Belej, chalupa) na nak.gordulic.sk: nahraj faktúru / účtenku / výpis,
+Náklady domácností (byt, dom v Belej, chalupa) na nak.gordulic.sk (nástupca spotreba_bela, odstránenej 2026-10-26): nahraj faktúru / účtenku / výpis,
 Claude ju prečíta, appka priradí k miestu a službe (keď si nie je istá, opýta sa raz a zapamätá si to),
 výpis spáruje s faktúrami, ZSD diportal dodáva dennú spotrebu elektriny. Prehľad = suma mesiaca po miestach.
 

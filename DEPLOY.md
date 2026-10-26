@@ -55,7 +55,8 @@ Over: `curl -sI https://nak.gordulic.sk/ | head -1` → `HTTP/2 303` (presmerova
 6. **Nastavenia → Schránka**: IMAP schránky na účty → „Otestovať prihlásenie“ → „Prečítať schránku teraz“.
 7. **Nastavenia → Zdroje dát**: ZSD prihlásenie, business partner ID (ako v `spotreba_bela/.env`), 2captcha kľúč
    → „Stiahnuť teraz“. Potom pri každej elektrine v Belej: Upraviť službu → Zdroj dát ZSD → vybrať odberné miesto.
-   `spotreba_bela` nechaj bežať, kým týždenný prehľad z nakladiaku neoveríš (pondelok ráno na ntfy).
+   `spotreba_bela` je z VPS odstránená (2026-10-26), takže od nasadenia nakladiaku preberá denné ZSD sťahovanie
+   aj pondelkový prehľad on; hodnoty ZSD a 2captcha nájdeš v starom `.env` v restic snapshote.
 8. **Nastavenia → O appke**: „nasadené“ = čas buildu, „Čo je nové“ = `changelog.md`.
 9. Mobil: Zdieľať → Pridať na plochu.
 
