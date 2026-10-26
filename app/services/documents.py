@@ -10,8 +10,41 @@ import threading
 from datetime import timedelta
 from pathlib import Path
 
-from .. import config, db, util
+from .. import config, db, settings, util
 from . import alerts, bank, extract, notify
+
+MAX_AMOUNT = 1_000_000
+CURRENCIES = {"EUR", "CZK", "USD", "GBP", "PLN", "HUF", "CHF"}
+# identifier kinds the model may turn into routing rules (never phone numbers or free text)
+RULE_IDENTIFIER_KINDS = {"EIC", "POD", "CISLO_ODBERNEHO_MIESTA", "CISLO_ZMLUVY", "CISLO_ZAKAZNIKA"}
+
+
+def _amt(v, default=None):
+    """Model output is data, not truth: amounts outside ±1 000 000 are treated as missing."""
+    f = util.to_float(v)
+    if f is None or abs(f) > MAX_AMOUNT:
+        return default
+    return round(f, 4)
+
+
+def _dt(v):
+    return str(v)[:10] if util.parse_date(v) else None
+
+
+def _cur(v) -> str:
+    v = str(v or "EUR").upper().strip()
+    return v if v in CURRENCIES else "EUR"
+
+
+def sender_allowed(mail_from: str) -> bool:
+    """Empty allow-list = everyone. Otherwise the From address or its domain must be listed."""
+    allowed = [x.strip().lower() for x in (settings.get("imap_allowed_senders") or "").split(",") if x.strip()]
+    if not allowed:
+        return True
+    m = re.search(r"[\w.+-]+@[\w.-]+", mail_from or "")
+    addr = m.group(0).lower() if m else (mail_from or "").lower().strip()
+    domain = addr.split("@")[-1]
+    return any(a == addr or a == domain or domain.endswith("." + a) for a in allowed)
 
 log = logging.getLogger(__name__)
 _process_lock = threading.Lock()
@@ -38,7 +71,7 @@ def sniff_mime(data: bytes, declared: str) -> str:
         return "image/webp"
     if data[:6] in (b"GIF87a", b"GIF89a"):
         return "image/gif"
-    return declared or ""
+    return ""  # unknown bytes are rejected whatever the client declared
 
 
 def store(filename: str, data: bytes, declared_mime: str, source: str, user_id=None, kind: str = "auto",
@@ -184,12 +217,29 @@ def process(doc_id: int) -> dict:
     if doc["kind"] != "auto" and data.get("doc_kind") != doc["kind"]:
         data["doc_kind_model"] = data.get("doc_kind")
         data["doc_kind"] = doc["kind"]
-    with db.tx():
-        _save_extracted(doc_id, data)
-        apply(doc_id, data)
+    # Mail is an open channel: anything from an unknown sender, or matched only by the model's
+    # guess / supplier name, waits for the user. Uploads come from a logged-in user.
+    strict = doc["source"] == "mail"
+    trusted = not strict or sender_allowed(doc.get("mail_from") or "")
+    try:
+        with db.tx():
+            _save_extracted(doc_id, data)
+            apply(doc_id, data, strict=strict, trusted=trusted)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("apply failed for document %s", doc_id)
+        db.run("UPDATE documents SET status='error', error=?, next_try_at=NULL, attempts=?, updated_at=? WHERE id=?",
+               ("Prečítané, ale dáta sa nepodarilo uložiť: " + str(exc)[:200], MAX_ATTEMPTS, db.now_iso(), doc_id))
+        alerts.alert(f"apply:{doc_id}", "dokument sa nedá uložiť", f"{doc['filename']}: {str(exc)[:200]}")
+        return load(doc_id)
     doc = load(doc_id)
     _announce(doc)
     return doc
+
+
+def process_one(doc_id: int) -> dict:
+    """Process a specific document under the same lock the scheduler uses (no double reads)."""
+    with _process_lock:
+        return process(doc_id)
 
 
 def _announce(doc: dict) -> None:
@@ -207,43 +257,61 @@ def _announce(doc: dict) -> None:
         notify.broadcast("Dokument spracovaný", summary + extra, click=url, tags=["white_check_mark"])
 
 
-def apply(doc_id: int, data: dict) -> None:
-    """Turn the extracted JSON into rows. Runs inside the caller's transaction."""
+def apply(doc_id: int, data: dict, strict: bool = False, trusted: bool = True) -> None:
+    """Turn the extracted JSON into rows. Runs inside the caller's transaction.
+    strict  = only identifier/rule matches may book automatically (mail channel);
+    trusted = sender is allowed to book anything automatically (False → always needs_review)."""
     kind = data.get("doc_kind") or "ine"
     db.run("DELETE FROM costs WHERE document_id=?", (doc_id,))
     db.run("DELETE FROM invoices WHERE document_id=?", (doc_id,))
     status, place_id, service_id = "needs_review", None, None
+    data.pop("hold_reason", None)
     if kind == "faktura" and data.get("invoice"):
         inv = data["invoice"]
         service, how = match_service(data, _services())
+        if service and strict and how not in ("identifier", "rule"):
+            data["hold_reason"] = "z mailu bez známeho identifikátora"
+            service = None
+        if service and not trusted:
+            data["hold_reason"] = "neznámy odosielateľ"
+            service = None
+        if service and _amt(inv.get("total")) is None:
+            data["hold_reason"] = "suma sa nedá prečítať"
+            service = None
         if service:
             service_id, place_id = service["id"], service["place_id"]
             status = "done"
         inv_id = _insert_invoice(doc_id, service_id, data, inv)
         if service:
             _cost_from_invoice(doc_id, inv_id, service, inv)
-            _learn_from_invoice(service, data, inv)
+            if how in ("identifier", "rule"):
+                _learn_from_invoice(service, data, inv)
         data["match_how"] = how
     elif kind == "uctenka" and data.get("receipt"):
         rc = data["receipt"]
         rule = bank.find_rule("merchant", util.fold(rc.get("merchant")))
-        pid = rule["place_id"] if rule else (data.get("matched_place_id") if float(data.get("match_confidence") or 0) >= 0.8 else None)
+        pid = rule["place_id"] if rule else ((data.get("matched_place_id") if float(data.get("match_confidence") or 0) >= 0.8 else None) if not strict else None)
+        if not trusted or _amt(rc.get("total")) is None:
+            pid = None
         if pid and db.q1("SELECT 1 FROM places WHERE id=? AND archived=0", (pid,)):
             place_id = pid
             cat = (rule["category"] if rule else "") or rc.get("category_hint") or "nakup"
             db.run("INSERT INTO costs(place_id,service_id,document_id,kind,category,counterparty,amount,currency,date,note,created_at)"
                    " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                    (place_id, rule["service_id"] if rule else None, doc_id, "uctenka", util.clean_text(cat, 40),
-                    util.clean_text(rc.get("merchant"), 120), abs(util.to_float(rc.get("total"), 0.0)),
-                    rc.get("currency") or "EUR", rc.get("date") or db.now_iso()[:10],
+                    util.clean_text(rc.get("merchant"), 120), abs(_amt(rc.get("total"), 0.0)),
+                    _cur(rc.get("currency")), _dt(rc.get("date")) or db.now_iso()[:10],
                     util.clean_text(data.get("summary"), 200), db.now_iso()))
             status = "done"
             if rule:
                 db.run("UPDATE rules SET hits=hits+1 WHERE id=?", (rule["id"],))
     elif kind == "vypis" and data.get("statement"):
-        bank.import_statement(doc_id, data["statement"])
-        status = "done"
-        db.set_setting("last_statement_at", db.now_iso())
+        if trusted:
+            bank.import_statement(doc_id, data["statement"])
+            status = "done"
+            db.set_setting("last_statement_at", db.now_iso())
+        else:
+            data["hold_reason"] = "neznámy odosielateľ"
     db.run("UPDATE documents SET kind=?, status=?, place_id=?, service_id=?, error='', updated_at=? WHERE id=?",
            (kind, status, place_id, service_id, db.now_iso(), doc_id))
     _save_extracted(doc_id, data)
@@ -255,11 +323,12 @@ def _insert_invoice(doc_id: int, service_id, data: dict, inv: dict) -> int:
         "to_pay,advances,currency,consumption,unit,unit_price,variable_symbol,iban,created_at)"
         " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (doc_id, service_id, util.clean_text(data.get("supplier"), 120), util.clean_text(inv.get("number"), 60),
-         inv.get("kind") or "pravidelna", inv.get("issued_at"), inv.get("period_from"), inv.get("period_to"),
-         inv.get("due_at"), util.to_float(inv.get("total"), 0.0), util.to_float(inv.get("to_pay")),
-         util.to_float(inv.get("advances")), inv.get("currency") or "EUR", util.to_float(inv.get("consumption")),
-         util.clean_text(inv.get("unit"), 10), util.to_float(inv.get("unit_price")),
-         util.norm_identifier(inv.get("variable_symbol")), util.norm_identifier(inv.get("iban")), db.now_iso()))
+         inv.get("kind") if inv.get("kind") in ("vyuctovanie", "zalohova", "pravidelna", "dobropis", "ine") else "pravidelna",
+         _dt(inv.get("issued_at")), _dt(inv.get("period_from")), _dt(inv.get("period_to")),
+         _dt(inv.get("due_at")), _amt(inv.get("total"), 0.0), _amt(inv.get("to_pay")),
+         _amt(inv.get("advances")), _cur(inv.get("currency")), _amt(inv.get("consumption")),
+         util.clean_text(inv.get("unit"), 10), _amt(inv.get("unit_price")),
+         util.norm_identifier(inv.get("variable_symbol"))[:40], util.norm_identifier(inv.get("iban"))[:34], db.now_iso()))
 
 
 def _cost_from_invoice(doc_id: int, inv_id: int, service: dict, inv: dict) -> None:
@@ -267,32 +336,33 @@ def _cost_from_invoice(doc_id: int, inv_id: int, service: dict, inv: dict) -> No
     whole year's cost minus advances already counted monthly, so for those we book only the
     balance (to_pay), never the total twice."""
     kind = inv.get("kind") or "pravidelna"
-    amount = util.to_float(inv.get("total"), 0.0)
-    if kind == "vyuctovanie" and inv.get("to_pay") is not None and inv.get("advances"):
-        amount = util.to_float(inv.get("to_pay"), amount)
+    amount = _amt(inv.get("total"), 0.0)
+    if kind == "vyuctovanie" and _amt(inv.get("to_pay")) is not None and _amt(inv.get("advances")):
+        amount = _amt(inv.get("to_pay"), amount)
     if kind == "dobropis":
         amount = -abs(amount)
-    date = inv.get("issued_at") or inv.get("period_to") or db.now_iso()[:10]
+    date = _dt(inv.get("issued_at")) or _dt(inv.get("period_to")) or db.now_iso()[:10]
     db.run("INSERT INTO costs(place_id,service_id,document_id,invoice_id,kind,category,counterparty,amount,currency,date,"
            "period_from,period_to,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
            (service["place_id"], service["id"], doc_id, inv_id, "faktura", service["kind"],
-            util.clean_text(service.get("supplier") or "", 120), amount, inv.get("currency") or "EUR", date,
-            inv.get("period_from"), inv.get("period_to"), db.now_iso()))
+            util.clean_text(service.get("supplier") or "", 120), amount, _cur(inv.get("currency")), date,
+            _dt(inv.get("period_from")), _dt(inv.get("period_to")), db.now_iso()))
 
 
 def _learn_from_invoice(service: dict, data: dict, inv: dict) -> None:
     """Keep the service's price knowledge fresh so estimates use the latest tariff."""
     sets, vals = [], []
-    if util.to_float(inv.get("unit_price")):
-        sets.append("unit_price=?"); vals.append(util.to_float(inv.get("unit_price")))
-    if util.to_float(inv.get("fixed_monthly")) is not None and util.to_float(inv.get("fixed_monthly")):
-        sets.append("fixed_monthly=?"); vals.append(util.to_float(inv.get("fixed_monthly")))
+    up, fm, tot = _amt(inv.get("unit_price")), _amt(inv.get("fixed_monthly")), _amt(inv.get("total"))
+    if up is not None and 0 < up < 100:
+        sets.append("unit_price=?"); vals.append(up)
+    if fm is not None and 0 < fm < 1000:
+        sets.append("fixed_monthly=?"); vals.append(fm)
     if inv.get("unit") and not service.get("unit"):
         sets.append("unit=?"); vals.append(util.clean_text(inv.get("unit"), 10))
     if data.get("supplier") and not service.get("supplier"):
         sets.append("supplier=?"); vals.append(util.clean_text(data.get("supplier"), 120))
-    if (inv.get("kind") or "") == "zalohova" and util.to_float(inv.get("total")):
-        sets.append("monthly_estimate=?"); vals.append(util.to_float(inv.get("total")))
+    if (inv.get("kind") or "") == "zalohova" and tot is not None and 0 < tot < 10000:
+        sets.append("monthly_estimate=?"); vals.append(tot)
     if not service.get("identifier"):
         for i in data.get("identifiers") or []:
             if i.get("kind", "").upper() in ("EIC", "POD") and i.get("value"):
@@ -326,13 +396,13 @@ def review(doc_id: int, user_id: int, place_id=None, service_id=None, category: 
             if remember:
                 for i in data.get("identifiers") or []:
                     v = util.norm_identifier(i.get("value"))
-                    if v and i.get("kind", "").upper() in ("EIC", "POD", "CISLO_ZAKAZNIKA", "CISLO_ZMLUVY", "CISLO_ODBERNEHO_MIESTA", "TELEFON"):
+                    if v and len(v) >= 6 and i.get("kind", "").upper() in RULE_IDENTIFIER_KINDS:
                         bank.upsert_rule("identifier", v, place_id=place_id, service_id=service["id"], label=data.get("supplier") or "")
                 sup = util.fold(data.get("supplier"))
                 if sup:
                     bank.upsert_rule("supplier", f"{sup}|{data.get('service_kind') or ''}", place_id=place_id,
                                      service_id=service["id"], label=data.get("supplier") or "")
-            apply(doc_id, data)
+            apply(doc_id, data, strict=False, trusted=True)
             # match_service() runs inside apply(); force the user's choice if it still disagreed
             db.run("UPDATE documents SET status='done', place_id=?, service_id=? WHERE id=?", (place_id, service["id"], doc_id))
             inv = db.row(db.q1("SELECT * FROM invoices WHERE document_id=?", (doc_id,)))
@@ -353,13 +423,13 @@ def review(doc_id: int, user_id: int, place_id=None, service_id=None, category: 
             db.run("INSERT INTO costs(place_id,service_id,document_id,kind,category,counterparty,amount,currency,date,note,created_at)"
                    " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                    (place_id, service["id"] if service else None, doc_id, "uctenka", cat,
-                    util.clean_text(rc.get("merchant"), 120), abs(util.to_float(rc.get("total"), 0.0)),
-                    rc.get("currency") or "EUR", rc.get("date") or db.now_iso()[:10],
+                    util.clean_text(rc.get("merchant"), 120), abs(_amt(rc.get("total"), 0.0)),
+                    _cur(rc.get("currency")), _dt(rc.get("date")) or db.now_iso()[:10],
                     util.clean_text(data.get("summary"), 200), db.now_iso()))
             db.run("UPDATE documents SET kind='uctenka', status='done', place_id=?, service_id=?, updated_at=? WHERE id=?",
                    (place_id, service["id"] if service else None, db.now_iso(), doc_id))
         elif data.get("doc_kind") == "vypis" and data.get("statement"):
-            apply(doc_id, data)
+            apply(doc_id, data, strict=False, trusted=True)
         else:
             # "iné": keep the file, attach it to a place, no cost row
             db.run("UPDATE documents SET kind='ine', status='done', place_id=?, updated_at=? WHERE id=?",

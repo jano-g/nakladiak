@@ -14,6 +14,7 @@ OVERRIDABLE: dict[str, tuple[str, str]] = {
     "imap_password": ("IMAP_PASSWORD", ""),
     "imap_folder": ("IMAP_FOLDER", "INBOX"),
     "imap_enabled": ("IMAP_ENABLED", "1"),
+    "imap_allowed_senders": ("IMAP_ALLOWED_SENDERS", ""),
     "zsd_user": ("ZSD_USER", ""),
     "zsd_password": ("ZSD_PASSWORD", ""),
     "zsd_business_partner_id": ("ZSD_BUSINESS_PARTNER_ID", ""),

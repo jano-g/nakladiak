@@ -17,7 +17,7 @@ log = logging.getLogger(__name__)
 SERVICE_KINDS = ["elektrina", "plyn", "voda", "internet", "tv", "mobil", "odpad", "kurenie",
                  "poistenie", "najom", "udrzba", "ine"]
 MAX_IMAGE_SIDE = 2000
-MAX_IMAGE_PIXELS = 40_000_000  # decompression-bomb ceiling for uploads (headpop lesson)
+MAX_IMAGE_PIXELS = 25_000_000  # decompression-bomb ceiling for uploads (headpop lesson); checked before decoding
 
 
 class ExtractError(RuntimeError):
@@ -129,11 +129,17 @@ Pravidlá:
 
 
 def _image_block(path: Path, mime: str) -> dict:
+    import warnings
     from PIL import Image, ImageOps
     Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
+    warnings.simplefilter("error", Image.DecompressionBombWarning)
     with Image.open(path) as im:
-        im = ImageOps.exif_transpose(im)
+        # header only so far — refuse huge images before a single pixel is decoded
+        if im.width * im.height > MAX_IMAGE_PIXELS:
+            raise ExtractError("Fotka je priveľká (viac ako 25 megapixelov). Zmenši ju a nahraj znova.")
+        im.draft("RGB", (MAX_IMAGE_SIDE * 2, MAX_IMAGE_SIDE * 2))
         im.thumbnail((MAX_IMAGE_SIDE, MAX_IMAGE_SIDE))
+        im = ImageOps.exif_transpose(im)
         if im.mode not in ("RGB", "L"):
             im = im.convert("RGB")
         buf = io.BytesIO()

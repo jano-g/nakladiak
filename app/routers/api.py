@@ -392,7 +392,7 @@ async def document_upload(request: Request, file: UploadFile = File(...), kind: 
 
 def _process_bg(doc_id: int) -> None:
     try:
-        documents.process_next_for(doc_id) if hasattr(documents, "process_next_for") else documents.process(doc_id)
+        documents.process_one(doc_id)
     except Exception:  # noqa: BLE001
         log.exception("background processing of %s failed", doc_id)
     finally:
@@ -417,7 +417,10 @@ def document_file(request: Request, did: int):
     path = documents.file_path(d)
     if not path.is_file():
         raise ApiError("Súbor chýba na disku.", 404)
-    return FileResponse(str(path), media_type=d["mime"], headers={"Content-Disposition": "inline", "Cache-Control": "private, no-store"})
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", util.fold(d["filename"]))[:80] or "dokument"
+    return FileResponse(str(path), media_type=d["mime"], headers={"Content-Disposition": f'inline; filename="{safe}"',
+                                                                  "Cache-Control": "private, no-store",
+                                                                  "Content-Security-Policy": "sandbox; default-src 'none'"})
 
 
 @router.post("/documents/{did}/review")
@@ -536,6 +539,10 @@ async def cost_create(request: Request):
     if not db.q1("SELECT 1 FROM places WHERE id=?", (place_id,)):
         raise ApiError("Miesto neexistuje.")
     service_id = _int(b.get("service_id"), "služba", allow_none=True)
+    if service_id:
+        s = db.q1("SELECT place_id FROM services WHERE id=?", (service_id,))
+        if not s or s["place_id"] != place_id:
+            raise ApiError("Služba nepatrí k vybranému miestu.")
     amount = _money(b.get("amount"), "suma", allow_none=False)
     category = util.clean_text(b.get("category"), 40) or "ine"
     with db.tx():
@@ -596,6 +603,8 @@ def _validate_setting(key: str, val: str) -> str:
         raise ApiError("Business partner ID: len písmená a číslice.")
     if key == "imap_folder" and val and not re.match(r"^[A-Za-z0-9 ._/-]{1,80}$", val):
         raise ApiError("Neplatný názov priečinka.")
+    if key == "imap_allowed_senders" and val and not re.match(r"^[A-Za-z0-9@._+, -]{1,300}$", val):
+        raise ApiError("Odosielatelia: adresy alebo domény oddelené čiarkou.")
     return val
 
 
@@ -698,6 +707,8 @@ async def connector_run(request: Request, name: str):
     days = _int(body.get("days", 8), "dni", 1, 400)
     db.log_history(u["id"], "connector_run", {"connector": name, "days": days}, _ip(request))
     from .. import scheduler
+    if scheduler._heavy.locked():
+        raise ApiError("Práve beží iný ťažký job (schránka alebo ZSD). Skús o chvíľu.")
 
     def work():
         try:
@@ -712,11 +723,16 @@ async def connector_run(request: Request, name: str):
 
 @router.get("/connectors/status")
 def connectors_status(request: Request):
-    current_user(request)
-    return {"zsd": {"configured": zsd.is_configured(), "last_run": zsd.last_run(), "last_ok": db.get_setting("zsd_last_ok"),
+    u = current_user(request)
+    cols = "id, connector, started_at, finished_at, ok, message" + (", details" if u.get("is_admin") else "")
+    last = zsd.last_run()
+    if last and not u.get("is_admin"):
+        last.pop("details", None)
+    return {"zsd": {"configured": zsd.is_configured(), "last_run": last, "last_ok": db.get_setting("zsd_last_ok"),
                     "delivery_points": zsd.delivery_points(), "mapped": len(zsd.mapped_services())},
-            "imap": {"configured": mailbox.is_configured(), "last_ok": db.get_setting("imap_last_ok"), "last_error": db.get_setting("imap_last_error")},
-            "runs": db.rows(db.q("SELECT * FROM connector_runs ORDER BY id DESC LIMIT 20"))}
+            "imap": {"configured": mailbox.is_configured(), "last_ok": db.get_setting("imap_last_ok"),
+                     "last_error": db.get_setting("imap_last_error") if u.get("is_admin") else ""},
+            "runs": db.rows(db.q(f"SELECT {cols} FROM connector_runs ORDER BY id DESC LIMIT 20"))}
 
 
 # --- profile / users ----------------------------------------------------------------------
@@ -736,6 +752,8 @@ async def profile_put(request: Request):
     email = util.clean_text(b.get("email", u["email"]), 120)
     if email and not EMAIL_RE.match(email):
         raise ApiError("Neplatný e-mail.")
+    if email != (u["email"] or "") and not auth.verify_password(str(b.get("current") or ""), u["password_hash"]):
+        raise ApiError("Zmena e-mailu potrebuje súčasné heslo.")
     topic = util.clean_text(b.get("ntfy_topic", u.get("ntfy_topic", "")), 80)
     if topic and not re.match(r"^[A-Za-z0-9_-]{1,64}$", topic):
         raise ApiError("ntfy téma: len písmená, číslice, - a _.")

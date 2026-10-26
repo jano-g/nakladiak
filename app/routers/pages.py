@@ -32,7 +32,7 @@ def index(request: Request):
 def login_form(request: Request, next: str = "/", error: str = ""):
     if getattr(request.state, "user", None) is not None:
         return RedirectResponse(_safe_next(next), status_code=303)
-    return render(request, "login.html", {"error": error, "next": _safe_next(next), "smtp": mailer.is_configured()})
+    return render(request, "login.html", {"error": LOGIN_ERRORS.get(error, ""), "next": _safe_next(next), "smtp": mailer.is_configured()})
 
 
 @router.post("/login")
@@ -44,7 +44,7 @@ def login(request: Request, username: str = Form(""), password: str = Form(""), 
     user = auth.check_login(username, password)
     if user is None:
         auth.record_failure(ip)
-        db.log_history(None, "login_failed", {"username": username[:40]}, ip)
+        db.log_history(None, "login_failed", {}, ip)  # never the typed name: people paste passwords into it
         return render(request, "login.html", {"error": "Nesprávne meno alebo heslo.", "next": _safe_next(next),
                                               "username": username[:40]}, status_code=401)
     auth.clear_failures(ip)
@@ -89,9 +89,15 @@ def set_password_do(request: Request, token: str, password: str = Form(""), pass
     return resp
 
 
+LOGIN_ERRORS = {"throttled": "Priveľa pokusov. Skús to o 15 minút.", "bad": "Nesprávne meno alebo heslo."}
+
+
 def _forgot_allowed(ip: str, uid: int | None) -> bool:
     with _forgot_lock:
         now = time.time()
+        if len(_forgot_ip) > 5000:
+            for k in [k for k, v in _forgot_ip.items() if not v or now - v[-1] >= 900]:
+                _forgot_ip.pop(k, None)
         recent = [t for t in _forgot_ip.get(ip, []) if now - t < 900]
         _forgot_ip[ip] = recent + [now]
         if len(recent) >= 5:
@@ -103,7 +109,7 @@ def _forgot_allowed(ip: str, uid: int | None) -> bool:
         return True
 
 
-@router.get("/forgot", response_class=HTMLResponse)
+@router.api_route("/forgot", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def forgot_form(request: Request):
     return render(request, "forgot.html", {"smtp": mailer.is_configured()})
 
@@ -118,11 +124,17 @@ def forgot_do(request: Request, who: str = Form("")):
         host = config.app_url().split("//", 1)[-1]
         body = (f"<p>Ahoj {mailer.esc(user['name'])},</p><p>niekto (asi ty) požiadal o nové heslo do appky na {mailer.esc(host)}. "
                 f"Odkaz platí hodinu.</p><p>Ak si o to nežiadal(a), mail ignoruj — heslo sa nezmenilo.</p>")
-        try:
-            mailer.send(user["email"], f"Nové heslo do {host}", mailer.wrap(body, [("Nastaviť nové heslo", url)]),
-                        f"Nové heslo do {host}: {url}\nOdkaz platí hodinu. Ak si o to nežiadal(a), mail ignoruj.")
-            db.log_history(user["id"], "password_reset_requested", {}, ip)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("reset mail failed: %s", exc)
-            db.log_history(None, "mail_failed", {"to": user["email"], "subject": "reset", "error": str(exc)[:200]})
+        db.log_history(user["id"], "password_reset_requested", {}, ip)
+
+        def work(to=user["email"]):
+            # in a thread: the response time must not reveal whether the account exists
+            try:
+                mailer.send(to, f"Nové heslo do {host}", mailer.wrap(body, [("Nastaviť nové heslo", url)]),
+                            f"Nové heslo do {host}: {url}\nOdkaz platí hodinu. Ak si o to nežiadal(a), mail ignoruj.")
+            except Exception as exc:  # noqa: BLE001
+                log.warning("reset mail failed: %s", exc)
+                db.log_history(None, "mail_failed", {"to": to, "subject": "reset", "error": str(exc)[:200]})
+            finally:
+                db.close()
+        threading.Thread(target=work, daemon=True).start()
     return render(request, "forgot.html", {"smtp": mailer.is_configured(), "sent": True})

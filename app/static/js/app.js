@@ -452,7 +452,7 @@ function reviewForm(d, onDone) {
     field('Čo to je', kindSel), field('Miesto', placeSel), svcWrap, catWrap, remember,
     el('div', { class: 'row-btns' }, el('button', { class: 'btn btn--primary', type: 'submit' }, svg('check'), 'Potvrdiť')));
   if (d.suggestion) form.prepend(el('div', { class: 'alert' }, el('b', {}, 'Appka navrhuje: '), d.suggestion, d.match_confidence ? `. Istota ${Math.round(d.match_confidence * 100)} %, skontroluj.` : '.'));
-  else if (d.status === 'needs_review') form.prepend(el('div', { class: 'alert' }, data.doc_kind === 'faktura' ? 'Appka nevie určiť službu. Vyber ju.' : 'Appka nevie určiť miesto. Vyber ho.'));
+  else if (d.status === 'needs_review') form.prepend(el('div', { class: 'alert' }, data.hold_reason ? `Čaká na potvrdenie: ${data.hold_reason}.` : data.doc_kind === 'faktura' ? 'Appka nevie určiť službu. Vyber ju.' : 'Appka nevie určiť miesto. Vyber ho.'));
   return form;
 }
 function reprocessForm(d) {
@@ -662,6 +662,7 @@ async function settingsMailbox() {
       field('Prihlasovacie meno', input('imap_user', sv.imap_user.value, { placeholder: 'uctenky@gordulic.sk' })),
       secretField('Heslo', 'imap_password', st),
       field('Priečinok', input('imap_folder', sv.imap_folder.value)),
+      field('Dôveryhodní odosielatelia', input('imap_allowed_senders', sv.imap_allowed_senders.value, { placeholder: 'zse.sk, spp.sk, jano@silnereci.sk' }), 'Len ich prílohy sa zaúčtujú samy. Prázdne = všetci; aj tak sa z mailu zaúčtuje len faktúra s poznaným identifikátorom, ostatné čakajú na potvrdenie.'),
       check('imap_enabled', 'Čítať schránku automaticky', sv.imap_enabled.value === '1', 'Každých 15 minút. Ak vypneš, dá sa spustiť ručne tlačidlom.')), () => loadMe()),
     el('div', { class: 'row-btns' }, await testBtn('Otestovať prihlásenie', 'imap'),
       el('button', { class: 'btn btn--sm', onclick: async (e) => { e.target.disabled = true; try { const r = await POST('/api/mailbox/poll'); toast(r.message); } catch (err) { toast(err.message, true); } finally { e.target.disabled = false; } } }, svg('refresh'), 'Prečítať schránku teraz')));
@@ -771,8 +772,9 @@ async function renderAbout() {
 // ---------- Profil ----------
 async function renderProfile() {
   const p = await GET('/api/profile');
-  const form = el('form', { onsubmit: (e) => { e.preventDefault(); submitForm(form, async (v) => { await PUT('/api/profile', { name: v.name, email: v.email, ntfy_topic: v.ntfy_topic, notify_ntfy: v.notify_ntfy, notify_email: v.notify_email }); toast('Uložené'); loadMe(); }); } },
-    field('Meno', input('name', p.name, { required: true })), field('E-mail', input('email', p.email, { type: 'email' }), 'Na obnovu hesla a upozornenia e-mailom.'),
+  const form = el('form', { onsubmit: (e) => { e.preventDefault(); submitForm(form, async (v) => { await PUT('/api/profile', { name: v.name, email: v.email, current: v.current, ntfy_topic: v.ntfy_topic, notify_ntfy: v.notify_ntfy, notify_email: v.notify_email }); toast('Uložené'); loadMe(); }); } },
+    field('Meno', input('name', p.name, { required: true })), field('E-mail', input('email', p.email, { type: 'email' }), 'Na obnovu hesla a upozornenia e-mailom. Zmena e-mailu potrebuje súčasné heslo.'),
+    field('Súčasné heslo (len pri zmene e-mailu)', input('current', '', { type: 'password', autocomplete: 'current-password' })),
     field('ntfy téma', input('ntfy_topic', p.ntfy_topic, { placeholder: 'napr. nakladiak-jano-x7k2' }), 'Tému si pridaj v appke ntfy. Vyber ťažko uhádnuteľnú.'),
     check('notify_ntfy', 'Upozornenia cez ntfy', p.notify_ntfy, 'Nový spracovaný dokument, faktúra pred splatnosťou, týždenná spotreba, pripomienka na výpis.'),
     check('notify_email', 'Upozornenia aj e-mailom', p.notify_email, p.email ? `Rovnaké upozornenia pôjdu aj na ${p.email}.` : 'Najprv vyplň e-mail.'),

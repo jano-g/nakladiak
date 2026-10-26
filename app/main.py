@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from urllib.parse import quote
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -85,7 +86,7 @@ async def auth_and_headers(request: Request, call_next):
     if not is_public and path != "/" and request.state.user is None:
         if path.startswith("/api/"):
             return JSONResponse({"detail": "Nie si prihlásený."}, status_code=401)
-        return RedirectResponse(f"/login?next={path}", status_code=303)
+        return RedirectResponse(f"/login?next={quote(path)}", status_code=303)
     if path.startswith("/api/") and request.method in ("POST", "PUT", "DELETE", "PATCH"):
         # CSRF: cookie auth + custom header the browser only adds to same-origin fetch().
         if request.headers.get("x-requested-with") != "nakladiak":
@@ -104,9 +105,10 @@ async def auth_and_headers(request: Request, call_next):
     h["X-Frame-Options"] = "DENY"
     h["Referrer-Policy"] = "strict-origin-when-cross-origin"
     h["Permissions-Policy"] = "camera=(self), microphone=(), geolocation=()"
-    h["Content-Security-Policy"] = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-                                    "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
-                                    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'")
+    if "Content-Security-Policy" not in h:  # a route may set a stricter one (document files: sandbox)
+        h["Content-Security-Policy"] = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                                        "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; "
+                                        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'")
     if config.is_https():
         h["Strict-Transport-Security"] = "max-age=31536000"
     if path.startswith("/p/") or path == "/forgot":

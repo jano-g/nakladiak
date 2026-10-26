@@ -86,7 +86,12 @@ def throttled(ip: str) -> bool:
 
 def record_failure(ip: str) -> None:
     with _lock:
-        _failures.setdefault(ip, []).append(time.time())
+        now = time.time()
+        if len(_failures) > 5000:
+            # drop every key whose newest failure is outside the window (not just the empty ones)
+            for k in [k for k, v in _failures.items() if not v or now - v[-1] >= FAIL_WINDOW]:
+                _failures.pop(k, None)
+        _failures.setdefault(ip, []).append(now)
 
 
 def clear_failures(ip: str) -> None:

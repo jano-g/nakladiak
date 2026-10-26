@@ -42,7 +42,7 @@ def import_statement(doc_id: int, st: dict) -> dict:
     for t in st.get("transactions") or []:
         amount = util.to_float(t.get("amount"))
         date = (t.get("date") or "")[:10]
-        if amount is None or not util.parse_date(date):
+        if amount is None or abs(amount) > 1_000_000 or not util.parse_date(date):
             continue
         fp = _fingerprint(t)
         if db.q1("SELECT 1 FROM transactions WHERE fingerprint=?", (fp,)):
@@ -50,8 +50,8 @@ def import_statement(doc_id: int, st: dict) -> dict:
             continue
         tid = db.run("INSERT INTO transactions(document_id,date,amount,currency,counterparty,counterparty_iban,variable_symbol,"
                      "note,fingerprint,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                     (doc_id, date, amount, t.get("currency") or "EUR", util.clean_text(t.get("counterparty"), 120),
-                      util.norm_identifier(t.get("counterparty_iban")), util.norm_identifier(t.get("variable_symbol")),
+                     (doc_id, date, round(amount, 2), (str(t.get("currency") or "EUR").upper()[:3] or "EUR"), util.clean_text(t.get("counterparty"), 120),
+                      util.norm_identifier(t.get("counterparty_iban"))[:34], util.norm_identifier(t.get("variable_symbol"))[:40],
                       util.clean_text(t.get("note"), 200), fp, "pending", db.now_iso()))
         counts["new"] += 1
         counts[classify(tid)] += 1
@@ -125,6 +125,15 @@ def assign_transaction(tid: int, user_id: int, place_id=None, service_id=None, c
     if not t:
         raise ValueError("Platba neexistuje.")
     category = util.clean_text(category, 40)
+    if place_id and not db.q1("SELECT 1 FROM places WHERE id=?", (place_id,)):
+        raise ValueError("Miesto neexistuje.")
+    if service_id:
+        s = db.q1("SELECT place_id FROM services WHERE id=?", (service_id,))
+        if not s:
+            raise ValueError("Služba neexistuje.")
+        if place_id and s["place_id"] != place_id:
+            raise ValueError("Služba nepatrí k vybranému miestu.")
+        place_id = place_id or s["place_id"]
     with db.tx():
         if t["cost_id"]:
             db.run("DELETE FROM costs WHERE id=?", (t["cost_id"],))
