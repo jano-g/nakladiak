@@ -1,0 +1,12 @@
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+jinja2==3.1.*
+python-multipart==0.0.*
+itsdangerous==2.2.*
+anthropic==2.3.*
+pillow==12.*
+# Pinned exactly to the Dockerfile base image (mcr.microsoft.com/playwright/python:v1.64.0-noble):
+# Playwright ships browser binaries per exact version. Bump both together, never just one
+# (spotreba_bela broke silently for 3 days after an unrelated rebuild picked up a newer playwright).
+playwright==1.64.0
+playwright-stealth>=2.0.0

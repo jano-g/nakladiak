@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#f5f3ee" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#17191d" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="{{ APP_NAME }}">
+<title>{{ APP_NAME }}</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="stylesheet" href="/static/css/app.css?v={{ v }}">
+<link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/img/apple-touch-icon.png">
+</head>
+<body>
+<div id="app" class="app">
+  <header class="top">
+    <a class="brand" href="#/"><img src="/static/img/icon-192.png" alt="" width="28" height="28"><span>{{ APP_NAME }}</span></a>
+    <nav class="nav nav--top" id="nav-top"></nav>
+    <div class="top__right" id="top-right"></div>
+  </header>
+  <main id="main" class="main" tabindex="-1"></main>
+  <nav class="tabbar" id="tabbar" aria-label="Hlavná navigácia"></nav>
+  <div id="sheet-root"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</div>
+<noscript><p class="center" style="padding:2rem">Aplikácia potrebuje zapnutý JavaScript.</p></noscript>
+<script src="/static/js/app.js?v={{ v }}" defer></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+services:
+  nakladiak:
+    build: .
+    container_name: nakladiak
+    restart: unless-stopped
+    # tini as PID 1: uvicorn never reaps orphans, and every Docker HEALTHCHECK that times out
+    # (e.g. while the VPS swaps) leaves a zombie `python` under it — 27 of them across 8 apps
+    # on 2026-10-25. The ZSD connector also spawns headless Chromium, which must be reaped.
+    init: true
+    env_file: .env
+    # nginx na hostiteľovi posiela nak.gordulic.sk -> 127.0.0.1:8180. Nikdy nepublikuj na 0.0.0.0.
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8180}:8000"
+    volumes:
+      - nakladiak_data:/data
+    environment:
+      - TZ=Europe/Bratislava
+    security_opt:
+      - no-new-privileges:true
+    # App alone ~120 MiB. The daily ZSD connector runs headless Chromium in a subprocess:
+    # spotreba_bela measured a 558 MiB peak (2026-10-19, cgroup memory.peak) → 768m, re-measure
+    # after the first week with `docker stats` and lower if the peak allows.
+    mem_limit: 768m
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  nakladiak_data:
