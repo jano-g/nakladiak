@@ -24,6 +24,10 @@ výpis spáruje s faktúrami, ZSD diportal dodáva dennú spotrebu elektriny. Pr
 - Dokument: `new → processing → done | needs_review | error` (backoff 5/30/180/720 min, po 4. pokuse alert).
   `apply()` je idempotentné (maže a znova vkladá invoices/costs daného dokumentu). Výstup modelu je dátový
   vstup, nie pravda: služba sa priraďuje najprv identifikátorom / pravidlom, model až pri istote ≥ 0.8.
+- Mail je nedôveryhodný kanál (`documents.process`: `strict`/`trusted`): z mailu sa samo zaúčtuje len faktúra
+  priradená identifikátorom alebo naučeným pravidlom, od odosielateľa mimo `imap_allowed_senders` nič. Sumy a dátumy
+  z modelu prechádzajú `_amt`/`_dt`/`_cur` (±1 000 000, platný dátum, známa mena); ceny služby (`_learn_from_invoice`)
+  sa učia len z overených faktúr a v rozumných hraniciach.
 - Náklady sa nikdy nepočítajú dvakrát: platba z výpisu k faktúre = `transactions.status='invoice'`, bez cost riadku.
 - Nová funkcia = API + UI + text notifikácie + riadok v `changelog.md` naraz; testy v `tests/` (`pytest`),
   Claude sa v testoch mockuje (`monkeypatch extract.extract`).

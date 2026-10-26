@@ -10,7 +10,9 @@ voda, internet, Starlink, správca, záhradník, upratovanie. Beží na **https:
   k miestu a službe. Keď si nie je istá, opýta sa raz; so zaškrtnutým „Zapamätať si to“ pôjde ďalší
   dokument od rovnakého dodávateľa alebo obchodu bez pýtania.
 - **Schránka na účty.** Maily od dodávateľov presmeruj do vyhradenej schránky; appka ju číta každých
-  15 minút a prílohy spracuje sama.
+  15 minút a prílohy spracuje sama. Z mailu sa zaúčtuje bez pýtania len faktúra s poznaným identifikátorom
+  (EIC, POD, číslo zmluvy) alebo naučeným pravidlom; ostatné čakajú na potvrdenie. V Nastaveniach → Schránka
+  môžeš určiť dôveryhodných odosielateľov.
 - **Výpis z účtu.** Platby sa spárujú s faktúrami (faktúra je potom „zaplatená“). Neznáme platby
   (záhradník, správca, upratovanie) zaradíš raz k miestu a kategórii, ďalšie od rovnakej protistrany
   sa zarátajú samy. Každých 30 dní príde pripomienka „nahraj výpis“.
