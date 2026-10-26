@@ -82,6 +82,14 @@ def dashboard(ym: str, today: date | None = None) -> dict:
             if s["connector"]:
                 item["week"] = service_consumption(s["id"], week_start, today)
                 item["month"] = service_consumption(s["id"], start, min(end, today))
+                # last 14 days for the sparkline in the place block (None = no reading that day)
+                since = today - timedelta(days=13)
+                have = {r["date"]: r["value"] for r in db.q(
+                    "SELECT date, value FROM readings WHERE service_id=? AND kind='consumption' AND date>=? AND date<=?",
+                    (s["id"], since.isoformat(), today.isoformat()))}
+                item["days"] = [{"date": (since + timedelta(days=i)).isoformat(),
+                                 "value": round(have[(since + timedelta(days=i)).isoformat()], 2) if (since + timedelta(days=i)).isoformat() in have else None}
+                                for i in range(14)]
                 gen = service_consumption(s["id"], start, min(end, today), "generation")
                 if gen["days"]:
                     item["generation_month"] = gen

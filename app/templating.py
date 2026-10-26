@@ -11,7 +11,7 @@ env = Environment(loader=FileSystemLoader(str(Path(__file__).parent / "templates
 env.globals.update(APP_URL=config.app_url())
 
 # Bump on every CSS/JS change — the service worker caches /static/ by this version.
-ASSET_VERSION = "1"
+ASSET_VERSION = "2"
 
 
 def render(request: Request, name: str, ctx: dict | None = None, status_code: int = 200,
