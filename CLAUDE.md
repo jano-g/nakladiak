@@ -31,6 +31,10 @@ výpis spáruje s faktúrami, ZSD diportal dodáva dennú spotrebu elektriny. Pr
   z modelu prechádzajú `_amt`/`_dt`/`_cur` (±1 000 000, platný dátum, známa mena); ceny služby (`_learn_from_invoice`)
   sa učia len z overených faktúr a v rozumných hraniciach.
 - Náklady sa nikdy nepočítajú dvakrát: platba z výpisu k faktúre = `transactions.status='invoice'`, bez cost riadku.
+  `_cost_from_invoice`: faktúra za N mesiacov = N riadkov; vyúčtovanie = len `to_pay` (preplatok záporne)
+  + vypísané zálohy (`kind='zaloha'`, dedup s prevodmi cez `advance_cost_near`, obojsmerne); `zalohova` = nič.
+  Reálne vzory účtov (Starlink EN, UPC polrok, ZSE byt/dom s FVE) sú v `tests/test_bills.py` — nový tvar účtu
+  = nový test tam.
 - Nová funkcia = API + UI + text notifikácie + riadok v `changelog.md` naraz; testy v `tests/` (`pytest`),
   Claude sa v testoch mockuje (`monkeypatch extract.extract`).
 - Zápisy do cudzích systémov neexistujú (len čítanie: Claude, IMAP, diportal). Credentials ZSD idú do subprocesu

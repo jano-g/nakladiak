@@ -262,7 +262,15 @@ def apply(doc_id: int, data: dict, strict: bool = False, trusted: bool = True) -
     strict  = only identifier/rule matches may book automatically (mail channel);
     trusted = sender is allowed to book anything automatically (False → always needs_review)."""
     kind = data.get("doc_kind") or "ine"
+    # an advance row that a bank transfer was later linked to stays as that transfer's own cost
+    db.run("UPDATE costs SET document_id=(SELECT document_id FROM transactions WHERE id=costs.transaction_id), "
+           "invoice_id=NULL, kind='prevod' WHERE document_id=? AND transaction_id IS NOT NULL "
+           "AND EXISTS (SELECT 1 FROM transactions WHERE id=costs.transaction_id)", (doc_id,))
     db.run("DELETE FROM costs WHERE document_id=?", (doc_id,))
+    # a transfer that paid this document's invoice is released and re-matched after the re-read
+    paid_by = [r["id"] for r in db.q("SELECT id FROM transactions WHERE invoice_id IN (SELECT id FROM invoices WHERE document_id=?)", (doc_id,))]
+    if paid_by:
+        db.run("UPDATE transactions SET status='pending', invoice_id=NULL WHERE invoice_id IN (SELECT id FROM invoices WHERE document_id=?)", (doc_id,))
     db.run("DELETE FROM invoices WHERE document_id=?", (doc_id,))
     status, place_id, service_id = "needs_review", None, None
     data.pop("hold_reason", None)
@@ -312,41 +320,121 @@ def apply(doc_id: int, data: dict, strict: bool = False, trusted: bool = True) -
             db.set_setting("last_statement_at", db.now_iso())
         else:
             data["hold_reason"] = "neznámy odosielateľ"
+    for tid in paid_by:
+        bank.classify(tid)
     db.run("UPDATE documents SET kind=?, status=?, place_id=?, service_id=?, error='', updated_at=? WHERE id=?",
            (kind, status, place_id, service_id, db.now_iso(), doc_id))
     _save_extracted(doc_id, data)
 
 
+def _generation(inv: dict) -> dict:
+    g = inv.get("generation") if isinstance(inv.get("generation"), dict) else {}
+    return {"kwh": _amt(g.get("kwh")), "amount": _amt(g.get("amount")), "fee": _amt(g.get("fee"))}
+
+
+def _next_advance(inv: dict) -> tuple[float | None, int | None, str | None]:
+    """(amount of one payment, months one payment covers, first due date) from the invoice's
+    'Harmonogram budúcich preddavkových platieb', bounded like every other model value."""
+    a = inv.get("next_advance") if isinstance(inv.get("next_advance"), dict) else None
+    if not a:
+        return None, None, None
+    amount, months = _amt(a.get("amount")), a.get("per_months")
+    if amount is None or not 0 < amount < 10000 or not isinstance(months, int) or not 1 <= months <= 12:
+        return None, None, None
+    return amount, months, _dt(a.get("first_due"))
+
+
+def _advance_payments(inv: dict) -> list[tuple[str, float]]:
+    """Paid advances the vyúčtovanie lists ('Prehľad preddavkových platieb'): (date, amount) with
+    a sane date inside / shortly before the billing period and a positive bounded amount."""
+    out = []
+    lo, hi = _dt(inv.get("period_from")), _dt(inv.get("issued_at")) or _dt(inv.get("period_to"))
+    for row in inv.get("advance_payments") or []:
+        if not isinstance(row, dict):
+            continue
+        d, a = _dt(row.get("date")), _amt(row.get("amount"))
+        if not d or a is None or not 0 < a < 10000:
+            continue
+        if (lo and d < util.add_months(util.parse_date(lo), -1).isoformat()) or (hi and d > hi):
+            continue
+        out.append((d, round(a, 2)))
+    return out[:40]
+
+
 def _insert_invoice(doc_id: int, service_id, data: dict, inv: dict) -> int:
+    g = _generation(inv)
+    adv_amount, adv_months, adv_from = _next_advance(inv)
     return db.run(
         "INSERT INTO invoices(document_id,service_id,supplier,number,kind,issued_at,period_from,period_to,due_at,total,"
-        "to_pay,advances,currency,consumption,unit,unit_price,variable_symbol,iban,created_at)"
-        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "to_pay,advances,currency,consumption,unit,unit_price,variable_symbol,iban,generation_kwh,generation_amount,"
+        "generation_fee,advance_amount,advance_months,advance_from,created_at)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (doc_id, service_id, util.clean_text(data.get("supplier"), 120), util.clean_text(inv.get("number"), 60),
          inv.get("kind") if inv.get("kind") in ("vyuctovanie", "zalohova", "pravidelna", "dobropis", "ine") else "pravidelna",
          _dt(inv.get("issued_at")), _dt(inv.get("period_from")), _dt(inv.get("period_to")),
          _dt(inv.get("due_at")), _amt(inv.get("total"), 0.0), _amt(inv.get("to_pay")),
          _amt(inv.get("advances")), _cur(inv.get("currency")), _amt(inv.get("consumption")),
          util.clean_text(inv.get("unit"), 10), _amt(inv.get("unit_price")),
-         util.norm_identifier(inv.get("variable_symbol"))[:40], util.norm_identifier(inv.get("iban"))[:34], db.now_iso()))
+         util.norm_identifier(inv.get("variable_symbol"))[:40], util.norm_identifier(inv.get("iban"))[:34],
+         g["kwh"], g["amount"], g["fee"], adv_amount, adv_months, adv_from, db.now_iso()))
+
+
+def period_months(inv: dict) -> int:
+    """How many months a bill covers (1 when unknown or shorter than ~6 weeks)."""
+    a, b = util.parse_date(_dt(inv.get("period_from"))), util.parse_date(_dt(inv.get("period_to")))
+    if not a or not b or b <= a:
+        return 1
+    return max(1, round(((b - a).days + 1) / 30.4))
+
+
+def advance_cost_near(service_id: int, date: str, amount: float, days: int = 10) -> dict | None:
+    """A cost row for this service with the same amount within ±days — the same advance seen
+    from the other side (bank transfer vs. the list on the vyúčtovanie)."""
+    return db.row(db.q1("SELECT * FROM costs WHERE service_id=? AND kind IN ('zaloha','prevod') AND ABS(amount-?)<0.05 "
+                        "AND ABS(julianday(date)-julianday(?))<=? ORDER BY id LIMIT 1", (service_id, amount, date, days)))
 
 
 def _cost_from_invoice(doc_id: int, inv_id: int, service: dict, inv: dict) -> None:
-    """One cost row per invoice: the total for the period. An annual vyúčtovanie carries the
-    whole year's cost minus advances already counted monthly, so for those we book only the
-    balance (to_pay), never the total twice."""
+    """Cost rows for an invoice, so that no euro is counted twice:
+    - zálohový predpis: no cost at all (it is a schedule; the advances arrive as bank transfers);
+    - vyúčtovanie: only the balance (to_pay — negative for a preplatok), plus every advance the bill
+      itself lists that we do not already have from a statement;
+    - a regular bill for several months (UPC half-year, O2 quarter): one row per month, so the
+      history is flat and no month gets an estimate on top of it;
+    - dobropis: negative."""
     kind = inv.get("kind") or "pravidelna"
-    amount = _amt(inv.get("total"), 0.0)
+    if kind == "zalohova":
+        return
+    total = _amt(inv.get("total"), 0.0)
+    cur, now = _cur(inv.get("currency")), db.now_iso()
+    date = _dt(inv.get("issued_at")) or _dt(inv.get("period_to")) or now[:10]
+    pf, pt = _dt(inv.get("period_from")), _dt(inv.get("period_to"))
+
+    def row(amount: float, when: str, ck: str = "faktura", note: str = ""):
+        db.run("INSERT INTO costs(place_id,service_id,document_id,invoice_id,kind,category,counterparty,amount,currency,date,"
+               "period_from,period_to,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+               (service["place_id"], service["id"], doc_id, inv_id, ck, service["kind"],
+                util.clean_text(service.get("supplier") or "", 120), round(amount, 2), cur, when, pf, pt, note, now))
+
     if kind == "vyuctovanie" and _amt(inv.get("to_pay")) is not None and _amt(inv.get("advances")):
-        amount = _amt(inv.get("to_pay"), amount)
+        row(_amt(inv.get("to_pay"), total), date, note="vyúčtovanie: nedoplatok / preplatok")
+        for d, a in _advance_payments(inv):
+            if not advance_cost_near(service["id"], d, a):
+                row(a, d, "zaloha", "záloha z vyúčtovania")
+        return
     if kind == "dobropis":
-        amount = -abs(amount)
-    date = _dt(inv.get("issued_at")) or _dt(inv.get("period_to")) or db.now_iso()[:10]
-    db.run("INSERT INTO costs(place_id,service_id,document_id,invoice_id,kind,category,counterparty,amount,currency,date,"
-           "period_from,period_to,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-           (service["place_id"], service["id"], doc_id, inv_id, "faktura", service["kind"],
-            util.clean_text(service.get("supplier") or "", 120), amount, _cur(inv.get("currency")), date,
-            _dt(inv.get("period_from")), _dt(inv.get("period_to")), db.now_iso()))
+        row(-abs(total), date)
+        return
+    months = period_months(inv) if kind in ("pravidelna", "ine") else 1
+    if months <= 1 or not pf:
+        row(total, date)
+        return
+    first = util.parse_date(pf)
+    share = round(total / months, 2)
+    for i in range(months):
+        when = max(first, util.month_start(util.add_months(first, i))) if i else first
+        amount = round(total - share * (months - 1), 2) if i == months - 1 else share
+        row(amount, when.isoformat(), note=f"{i + 1}/{months} z faktúry za {util.plural(months, 'mesiac', 'mesiace', 'mesiacov')}")
 
 
 def _learn_from_invoice(service: dict, data: dict, inv: dict) -> None:
@@ -361,12 +449,25 @@ def _learn_from_invoice(service: dict, data: dict, inv: dict) -> None:
         sets.append("unit=?"); vals.append(util.clean_text(inv.get("unit"), 10))
     if data.get("supplier") and not service.get("supplier"):
         sets.append("supplier=?"); vals.append(util.clean_text(data.get("supplier"), 120))
-    if (inv.get("kind") or "") == "zalohova" and tot is not None and 0 < tot < 10000:
-        sets.append("monthly_estimate=?"); vals.append(tot)
+    kind = inv.get("kind") or ""
+    adv_amount, adv_months, _ = _next_advance(inv)
+    monthly = None
+    if adv_amount:
+        monthly = adv_amount / adv_months                      # new advance schedule on the vyúčtovanie
+    elif kind == "zalohova" and tot is not None:
+        monthly = tot                                          # rozpis záloh: total = one monthly advance
+    elif kind in ("pravidelna", "ine", "vyuctovanie") and tot is not None:
+        monthly = tot / period_months(inv)                     # a bill for N months → N-th per month
+    if monthly is not None and 0 < monthly < 10000:
+        sets.append("monthly_estimate=?"); vals.append(round(monthly, 2))
     if not service.get("identifier"):
         for i in data.get("identifiers") or []:
-            if i.get("kind", "").upper() in ("EIC", "POD") and i.get("value"):
+            if i.get("kind", "").upper() in ("EIC", "POD", "CISLO_MIESTA_SPOTREBY") and i.get("value"):
                 sets.append("identifier=?"); vals.append(util.clean_text(i["value"], 60)); break
+    vs = util.norm_identifier(inv.get("variable_symbol"))[:40]
+    if vs and not service.get("identifier2") and vs != util.norm_identifier(service.get("identifier")):
+        # ZSE / UPC / O2 keep one variable symbol per delivery point for years → a second key
+        sets.append("identifier2=?"); vals.append(vs)
     if sets:
         sets.append("updated_at=?"); vals.append(db.now_iso()); vals.append(service["id"])
         db.run(f"UPDATE services SET {', '.join(sets)} WHERE id=?", vals)

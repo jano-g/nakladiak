@@ -377,6 +377,17 @@ async function renderDocuments(filter) {
     docs.length ? el('div', {}, ...docs.map((d) => docCard(d))) :
       el('div', { class: 'empty' }, el('p', {}, filter === 'open' ? 'Nič nečaká. Všetky dokumenty sú spracované.' : 'Zatiaľ žiadny dokument.'), el('a', { class: 'btn btn--primary', href: '#/upload' }, 'Nahrať prvý účet')));
 }
+function costsSummary(costs) {
+  // "11 záloh spolu 1 045,00 €" + the other rows one by one (a half-year bill spread over months reads as "6 × 14,95 €")
+  const adv = costs.filter((c) => c.kind === 'zaloha');
+  const rest = costs.filter((c) => c.kind !== 'zaloha');
+  const parts = [];
+  if (adv.length) parts.push(`${plural(adv.length, 'záloha', 'zálohy', 'záloh')} spolu ${fmtEur(adv.reduce((a, c) => a + c.amount, 0))}`);
+  if (rest.length > 2 && rest.every((c) => Math.abs(c.amount - rest[0].amount) < 0.02)) parts.push(`${rest.length} × ${fmtEur(rest[0].amount)} (${catLabel(rest[0].category)}, ${fmtDate(rest[rest.length - 1].date)} – ${fmtDate(rest[0].date)})`);
+  else rest.forEach((c) => parts.push(`${fmtEur(c.amount)} (${catLabel(c.category)}, ${fmtDate(c.date)})`));
+  return parts.join(', ');
+}
+
 async function renderDocument(id) {
   let d = await GET('/api/documents/' + id);
   const main = $('#main');
@@ -390,8 +401,11 @@ async function renderDocument(id) {
       facts.push(['Typ', { vyuctovanie: 'Vyúčtovanie', zalohova: 'Zálohový predpis', pravidelna: 'Pravidelná faktúra', dobropis: 'Dobropis', ine: 'Faktúra' }[inv.kind] || 'Faktúra']);
       if (inv.number) facts.push(['Číslo', inv.number]);
       if (inv.period_from || inv.period_to) facts.push(['Obdobie', `${fmtDate(inv.period_from)} – ${fmtDate(inv.period_to)}`]);
-      facts.push(['Suma', fmtEur(inv.total) + (inv.to_pay != null && inv.to_pay !== inv.total ? ` (na úhradu ${fmtEur(inv.to_pay)})` : '')]);
+      facts.push(['Suma', fmtEur(inv.total) + (inv.to_pay != null && inv.to_pay !== inv.total ? (inv.to_pay < 0 ? ` (preplatok ${fmtEur(-inv.to_pay)})` : ` (na úhradu ${fmtEur(inv.to_pay)})`) : '')]);
+      if (inv.advances) facts.push(['Započítané zálohy', fmtEur(inv.advances)]);
       if (inv.consumption != null) facts.push(['Spotreba', `${fmtNum(inv.consumption, 1)} ${inv.unit || ''}${inv.unit_price ? ` · ${fmtNum(inv.unit_price, 4)} €/${inv.unit || 'j.'}` : ''}`]);
+      if (inv.generation_kwh != null || inv.generation_amount != null) facts.push(['Dodávka do siete', [inv.generation_kwh != null ? `${fmtNum(inv.generation_kwh, 0)} kWh` : null, inv.generation_amount != null ? `+${fmtEur(inv.generation_amount)}` : null, inv.generation_fee ? `poplatok ${fmtEur(inv.generation_fee)}` : null].filter(Boolean).join(' · ')]);
+      if (inv.advance_amount) facts.push(['Nová záloha', `${fmtEur(inv.advance_amount)} ${{ 1: 'mesačne', 2: 'každé 2 mesiace', 3: 'štvrťročne', 6: 'polročne', 12: 'ročne' }[inv.advance_months] || `za ${inv.advance_months} mes.`}${inv.advance_from ? ` od ${fmtDate(inv.advance_from)}` : ''}${inv.advance_months > 1 ? ` · ≈ ${fmtEur(inv.advance_amount / inv.advance_months)} mesačne` : ''}`]);
       if (inv.due_at) facts.push(['Splatnosť', fmtDate(inv.due_at) + (inv.paid_at ? ` · zaplatená ${fmtDate(inv.paid_at)}` : ' · nezaplatená')]);
       if (inv.variable_symbol) facts.push(['VS', inv.variable_symbol]);
     }
@@ -409,7 +423,7 @@ async function renderDocument(id) {
         el('dl', { class: 'kv' },
           el('dt', {}, 'Miesto'), el('dd', {}, place ? el('a', { href: '#/places/' + place.id }, place.name) : '–'),
           svc ? [el('dt', {}, 'Služba'), el('dd', {}, el('a', { href: '#/services/' + svc }, 'otvoriť službu'))] : null,
-          d.costs?.length ? [el('dt', {}, 'Do nákladov'), el('dd', {}, d.costs.map((c) => `${fmtEur(c.amount)} (${catLabel(c.category)}, ${fmtDate(c.date)})`).join(', '))] : null,
+          d.costs?.length ? [el('dt', {}, 'Do nákladov'), el('dd', {}, costsSummary(d.costs))] : null,
           d.match_how ? [el('dt', {}, 'Priradené'), el('dd', {}, { identifier: 'podľa identifikátora', rule: 'podľa naučeného pravidla', supplier: 'podľa dodávateľa', model: 'odhadom z dokumentu' }[d.match_how] || d.match_how)] : null),
         el('div', { class: 'row-btns' },
           (data.doc_kind === 'faktura' || data.doc_kind === 'uctenka' || data.doc_kind === 'ine') ? el('button', { class: 'btn btn--sm', onclick: () => openSheet('Zmeniť priradenie', reviewForm(d, (nd) => { closeSheet(); d = nd; draw(); loadMe(); })) }, svg('edit'), 'Zmeniť priradenie') : null,
@@ -571,7 +585,7 @@ function serviceForm(placeId, s, onDone) {
   const form = el('form', { onsubmit: (e) => { e.preventDefault(); submitForm(form, async (v) => { const body = { ...v, place_id: placeId, active: s ? v.active : true }; if (s) await PUT('/api/services/' + s.id, body); else await POST('/api/services', body); toast(s ? 'Služba upravená' : 'Služba pridaná'); onDone(); }); } },
     el('div', { class: 'grid2' }, field('Druh', select('kind', S.meta.service_kinds, s?.kind || 'elektrina')), field('Dodávateľ', input('supplier', s?.supplier || '', { placeholder: 'ZSE, SPP, ZsVS, O2…' }))),
     field('Pomenovanie (nepovinné)', input('label', s?.label || '', { placeholder: 'napr. garáž, 2. elektromer' })),
-    el('div', { class: 'grid2' }, field('Identifikátor', input('identifier', s?.identifier || '', { placeholder: 'EIC, POD, číslo zmluvy' }), 'Z faktúry. Podľa neho sa faktúry priradia samy.'), field('Druhý identifikátor', input('identifier2', s?.identifier2 || '', { placeholder: 'číslo zákazníka, telefón' }))),
+    el('div', { class: 'grid2' }, field('Identifikátor', input('identifier', s?.identifier || '', { placeholder: 'EIC, POD, číslo miesta spotreby' }), 'Z faktúry. Podľa neho sa faktúry priradia samy. Nie zákaznícke číslo — to je spoločné pre všetky tvoje odbery u dodávateľa.'), field('Druhý identifikátor', input('identifier2', s?.identifier2 || '', { placeholder: 'variabilný symbol, číslo zmluvy, telefón' }), 'Doplní sa z prvej priradenej faktúry.')),
     el('div', { class: 'grid2' }, field('Jednotka', input('unit', s?.unit || '', { placeholder: 'kWh, m3, GB' })), field('Cena za jednotku (€)', input('unit_price', s?.unit_price ?? '', { inputmode: 'decimal', placeholder: 'napr. 0,21' }), 'Doplní sa z faktúry.')),
     el('div', { class: 'grid2' }, field('Fixný mesačný poplatok (€)', input('fixed_monthly', s?.fixed_monthly ?? '', { inputmode: 'decimal' })), field('Mesačná záloha / paušál (€)', input('monthly_estimate', s?.monthly_estimate ?? '', { inputmode: 'decimal' }), 'Odhad, keď v mesiaci nie je faktúra.')),
     field('Zdroj dát', connSel), connBox,

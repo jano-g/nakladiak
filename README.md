@@ -36,13 +36,21 @@ voda, internet, Starlink, správca, záhradník, upratovanie. Beží na **https:
 
 ## Ako sa počítajú náklady
 
-- Faktúra → jedna položka nákladov s dátumom vystavenia (pri ročnom vyúčtovaní sa počíta len nedoplatok,
-  zálohy už boli zarátané mesačne). Dobropis znižuje náklady.
-- Služba bez faktúry v mesiaci: odhad = spotreba × cena za jednotku + fixný poplatok (pri ZSD dátach),
+- **Faktúra za obdobie** (mesačná, štvrťročná, polročná — UPC, O2, Starlink) → rozpočíta sa rovnomerne
+  na mesiace obdobia (UPC 89,70 € za polrok = 6 × 14,95 €), aby história nemala skoky a žiadny mesiac
+  nedostal k faktúre ešte aj odhad. Dobropis znižuje náklady.
+- **Ročné vyúčtovanie** (ZSE, SPP, voda) → do nákladov ide len nedoplatok (preplatok záporne), zálohy sa
+  počítajú mesačne. Uhradené zálohy, ktoré vyúčtovanie samo vypisuje, appka doplní za mesiace, kde ich ešte
+  nemá z výpisu; keď príde výpis neskôr, platba sa priradí k tej istej položke. Nová výška zálohy
+  z harmonogramu sa stane odhadom na ďalšie mesiace. Pri dome s fotovoltikou (ZSE: faktúra za spotrebu +
+  faktúry za výrobu + sumarizácia v jednom PDF) sa účtuje suma zo sumarizácie a dodávka do siete sa eviduje
+  pri faktúre.
+- **Zálohový predpis** (rozpis záloh) → nič do nákladov, len odhad na mesiac a nič „na úhradu“.
+- **Služba bez faktúry v mesiaci**: odhad = spotreba × cena za jednotku + fixný poplatok (pri ZSD dátach),
   inak mesačná záloha / paušál. Odhad je v prehľade označený `≈`.
-- Účtenka → položka nákladov miesta v kategórii (údržba, nákup…).
-- Platba z výpisu → položka nákladov, ak nie je platbou známej faktúry. Platby službe, ktorá má faktúru
-  v okolí ±45 dní, sa nepočítajú dvakrát.
+- **Účtenka** → položka nákladov miesta v kategórii (údržba, nákup…).
+- **Platba z výpisu** → položka nákladov, ak nie je platbou známej faktúry (rovnaký VS a suma) ani pravidelnej
+  faktúry tej služby v okolí ±45 dní. Platba okolo vyúčtovania je záloha, teda náklad.
 
 ## Lokálny vývoj
 

@@ -152,7 +152,7 @@ def due_invoices(today: date, days: int = 21) -> list[dict]:
     rows = db.rows(db.q(
         "SELECT i.*, s.kind service_kind, s.label service_label, p.name place_name, p.id place_id FROM invoices i "
         "LEFT JOIN services s ON s.id=i.service_id LEFT JOIN places p ON p.id=s.place_id "
-        "WHERE i.paid_at IS NULL AND i.due_at IS NOT NULL AND i.due_at<=? AND COALESCE(i.to_pay,i.total)>0 "
+        "WHERE i.paid_at IS NULL AND i.due_at IS NOT NULL AND i.due_at<=? AND COALESCE(i.to_pay,i.total)>0 AND i.kind<>'zalohova' "
         "ORDER BY i.due_at", ((today + timedelta(days=days)).isoformat(),)))
     return [{"id": r["id"], "document_id": r["document_id"], "supplier": r["supplier"], "due_at": r["due_at"],
              "amount": round(r["to_pay"] if r["to_pay"] is not None else r["total"], 2),

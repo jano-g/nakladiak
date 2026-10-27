@@ -94,7 +94,8 @@ def invoice_result(**over):
     inv = {"number": "2026001", "kind": "pravidelna", "issued_at": "2026-10-05", "period_from": "2026-09-01",
            "period_to": "2026-09-30", "due_at": "2026-10-20", "total": 84.5, "to_pay": 84.5, "advances": None,
            "currency": "EUR", "consumption": 310.0, "unit": "kWh", "unit_price": 0.21, "fixed_monthly": 9.5,
-           "variable_symbol": "2026001", "iban": "SK3112000000198742637541"}
+           "variable_symbol": "2026001", "iban": "SK3112000000198742637541",
+           "generation": None, "next_advance": None, "advance_payments": []}
     inv.update(over.pop("invoice", {}))
     return BASE | {"doc_kind": "faktura", "supplier": "ZSE Energia", "service_kind": "elektrina",
                    "identifiers": [{"kind": "EIC", "value": "24ZZS1234567890A"}], "match_confidence": 0.9,

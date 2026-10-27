@@ -216,6 +216,16 @@ CREATE TABLE IF NOT EXISTS reminders_sent (
 # Forward-only migrations, applied in order; PRAGMA user_version = len(applied).
 MIGRATIONS: list[str] = [
     SCHEMA,
+    # 2026-10-27: what a real ZSE / UPC / Starlink bill carries beyond one total — feed-in from the
+    # house's PV, the new advance schedule and the advances the vyúčtovanie already lists.
+    """
+    ALTER TABLE invoices ADD COLUMN generation_kwh REAL;
+    ALTER TABLE invoices ADD COLUMN generation_amount REAL;
+    ALTER TABLE invoices ADD COLUMN generation_fee REAL;
+    ALTER TABLE invoices ADD COLUMN advance_amount REAL;
+    ALTER TABLE invoices ADD COLUMN advance_months INTEGER;
+    ALTER TABLE invoices ADD COLUMN advance_from TEXT;
+    """,
 ]
 
 

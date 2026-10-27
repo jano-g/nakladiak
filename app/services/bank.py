@@ -106,11 +106,23 @@ def _match_invoice(t: dict) -> dict | None:
 
 
 def _service_has_invoice_near(service_id: int, t: dict) -> bool:
-    return bool(db.q1("SELECT 1 FROM invoices WHERE service_id=? AND ABS(julianday(COALESCE(issued_at,period_to,?))-julianday(?))<=45",
+    """A regular bill (monthly / quarterly / half-year) within ±45 days: the transfer pays it.
+    A vyúčtovanie or a zálohový predpis does not count — the advances paid around them are
+    costs of their own (the vyúčtovanie books only its balance)."""
+    return bool(db.q1("SELECT 1 FROM invoices WHERE service_id=? AND kind IN ('pravidelna','ine','dobropis') "
+                      "AND ABS(julianday(COALESCE(issued_at,period_to,?))-julianday(?))<=45",
                       (service_id, t["date"], t["date"])))
 
 
 def _assign(t: dict, place_id, service_id, category: str, rule_id=None) -> int:
+    if service_id:
+        from . import documents
+        same = documents.advance_cost_near(service_id, t["date"], abs(t["amount"]))
+        if same and same["kind"] == "zaloha" and not same["transaction_id"]:
+            # the vyúčtovanie already listed this advance: the transfer is that row, not a second one
+            db.run("UPDATE costs SET transaction_id=?, counterparty=? WHERE id=?", (t["id"], t["counterparty"], same["id"]))
+            db.run("UPDATE transactions SET status='assigned', cost_id=?, rule_id=? WHERE id=?", (same["id"], rule_id, t["id"]))
+            return same["id"]
     cost_id = db.run("INSERT INTO costs(place_id,service_id,document_id,transaction_id,kind,category,counterparty,amount,currency,date,note,created_at)"
                      " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                      (place_id, service_id, t["document_id"], t["id"], "prevod", category or "ine", t["counterparty"],
@@ -136,7 +148,9 @@ def assign_transaction(tid: int, user_id: int, place_id=None, service_id=None, c
         place_id = place_id or s["place_id"]
     with db.tx():
         if t["cost_id"]:
-            db.run("DELETE FROM costs WHERE id=?", (t["cost_id"],))
+            # a row the vyúčtovanie listed stays the invoice's; only our own transfer row goes
+            db.run("UPDATE costs SET transaction_id=NULL WHERE id=? AND kind='zaloha'", (t["cost_id"],))
+            db.run("DELETE FROM costs WHERE id=? AND kind<>'zaloha'", (t["cost_id"],))
             db.run("UPDATE transactions SET cost_id=NULL WHERE id=?", (tid,))
         rule_id = None
         if remember and (t["counterparty_iban"] or t["counterparty"]):

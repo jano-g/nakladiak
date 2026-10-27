@@ -61,10 +61,23 @@ SCHEMA = {
                     "consumption": _NUM, "unit": _STR, "unit_price": _NUM,
                     "fixed_monthly": _NUM,
                     "variable_symbol": _STR, "iban": _STR,
+                    "generation": {"anyOf": [{"type": "null"}, {
+                        "type": "object", "additionalProperties": False,
+                        "properties": {"kwh": _NUM, "amount": _NUM, "fee": _NUM},
+                        "required": ["kwh", "amount", "fee"]}]},
+                    "next_advance": {"anyOf": [{"type": "null"}, {
+                        "type": "object", "additionalProperties": False,
+                        "properties": {"amount": {"type": "number"}, "per_months": {"type": "integer"}, "first_due": _DATE},
+                        "required": ["amount", "per_months", "first_due"]}]},
+                    "advance_payments": {"type": "array", "items": {
+                        "type": "object", "additionalProperties": False,
+                        "properties": {"date": {"type": "string"}, "amount": {"type": "number"}},
+                        "required": ["date", "amount"]}},
                 },
                 "required": ["number", "kind", "issued_at", "period_from", "period_to", "due_at", "total",
                              "to_pay", "advances", "currency", "consumption", "unit", "unit_price",
-                             "fixed_monthly", "variable_symbol", "iban"],
+                             "fixed_monthly", "variable_symbol", "iban", "generation", "next_advance",
+                             "advance_payments"],
             }]
         },
         "receipt": {
@@ -109,24 +122,47 @@ Pravidlá:
 - doc_kind: "faktura" = faktúra/vyúčtovanie/zálohový predpis od dodávateľa (elektrina, plyn, voda, internet,
   TV, mobil, odpad, poistenie…); "uctenka" = pokladničný doklad z obchodu/servisu; "vypis" = výpis z bankového
   účtu; "ine" = čokoľvek iné.
+- supplier: obchodná značka, pod ktorou dodávateľ vystupuje (ZSE, SPP, UPC, O2, Starlink, BVS), nie dlhý
+  právny názov (napr. faktúru od Energetika Slovensko, a.s. so značkou ZSE označ "ZSE").
 - Sumy sú čísla v eurách (bodka ako desatinný oddeľovač), vrátane DPH. Vo výpise je výdavok záporný, príjem kladný.
-- Dátumy vždy ako YYYY-MM-DD. Ak dátum chýba, null — nič nevymýšľaj.
-- identifiers: EIC, POD, číslo odberného miesta, číslo zákazníka, číslo zmluvy, telefónne číslo, variabilný
-  symbol — s kind po slovensky (napr. "EIC", "POD", "cislo_zakaznika", "cislo_zmluvy", "telefon").
-- service_kind podľa toho, čo sa fakturuje. Teplo/teplá voda od bytového družstva = "kurenie".
-- consumption: fakturovaná spotreba za obdobie v jednotkách unit (kWh, m3, GB). Pri vyúčtovaní elektriny
-  spotrebu zrátaj zo všetkých taríf (VT + NT). unit_price = priemerná cena za jednotku s DPH (celková suma za
-  energiu / spotreba), ak sa dá zistiť. fixed_monthly = fixné mesačné poplatky s DPH (platba za odberné miesto,
-  paušál), ak sú uvedené.
+  Dokumenty môžu byť aj po anglicky (Starlink: "Invoice Date", "Total Due", "EUR 50,00").
+- Dátumy vždy ako YYYY-MM-DD, aj z anglického zápisu ("Saturday, September 27, 2025" → 2025-09-27).
+  Ak dátum chýba, null — nič nevymýšľaj.
+- identifiers: všetko, čo identifikuje odberné miesto alebo zmluvu — s kind po slovensky: "EIC", "POD",
+  "cislo_miesta_spotreby", "cislo_zmluvy", "variabilny_symbol", "cislo_zakaznika", "telefon", "zariadenie"
+  (napr. KIT Starlinku). Pozor: zákaznícke číslo (ZSE „Zákaznícke číslo“, Starlink „Customer Account“) je
+  spoločné pre všetky odberné miesta zákazníka, preto službu neurčuj len podľa neho — rozhoduje EIC, číslo
+  miesta spotreby, variabilný symbol alebo adresa odberného miesta.
+- service_kind podľa toho, čo sa fakturuje. Teplo/teplá voda od bytového družstva = "kurenie". Starlink = "internet".
+- invoice.kind: "vyuctovanie" = ročné/periodické vyúčtovanie so započítanými zálohami; "pravidelna" = bežná
+  faktúra za obdobie (mesačná, štvrťročná, polročná); "zalohova" = rozpis / predpis záloh bez vyúčtovania;
+  "dobropis" = dobropis.
+- total = celková fakturovaná suma za obdobie s DPH (pri vyúčtovaní „Dodávka a distribúcia“ za celé obdobie,
+  bez odpočítania záloh). advances = súčet započítaných uhradených záloh (kladné číslo). to_pay = suma na
+  úhradu: nedoplatok kladný, PREPLATOK ZÁPORNÝ (napr. "Suma na vrátenie (preplatok): −118,03 €" → -118.03).
+- Ak jeden PDF obsahuje viac faktúr toho istého odberu a „Sumarizáciu“ (ZSE: faktúra za elektrinu + faktúra za
+  výrobu odberateľská + faktúra za výrobu dodávateľská), invoice je hlavná faktúra za spotrebu a to_pay je
+  „Suma na úhradu“ zo Sumarizácie (kladná = nedoplatok, záporná = preplatok). Do generation daj dodávku do
+  siete: kwh = dodané kWh, amount = suma, ktorú dodávateľ platí za dodanú elektrinu (kladné číslo),
+  fee = poplatok za odovzdávacie miesto. Inak generation = null.
+- consumption: fakturovaná spotreba za obdobie v jednotkách unit (kWh, m3, GB). Pri elektrine spotrebu zrátaj zo
+  všetkých taríf (VT + NT) a všetkých cenových období. unit_price = priemerná cena za jednotku s DPH BEZ fixných
+  poplatkov: (suma za elektrinu/plyn s DPH − fixné mesačné platby s DPH) / spotreba. fixed_monthly = fixné
+  mesačné poplatky s DPH za jeden mesiac (platba za odberné miesto + pevná zložka distribúcie), ak sú uvedené.
+- next_advance: z tabuľky „Harmonogram budúcich preddavkových platieb“ — amount = suma jednej platby,
+  per_months = koľko mesiacov jedna platba pokrýva (mesačne 1, štvrťročne 3, polročne 6; "09/26-01/27" = 5),
+  first_due = splatnosť prvej. Bez harmonogramu null.
+- advance_payments: z tabuľky „Prehľad preddavkových platieb za fakturačné obdobie“ každá UHRADENÁ záloha
+  (date = dátum vyrovnania alebo splatnosť, amount = výška s DPH). Bez tabuľky prázdne pole.
 - Pri zálohovom predpise (rozpis záloh) daj kind "zalohova", total = mesačná záloha a period_from/period_to
   = obdobie, na ktoré platí.
 - matched_service_id / matched_place_id: id zo zoznamu známych služieb/miest, ktorému dokument patrí
   (rovnaký identifikátor, dodávateľ, adresa odberného miesta). Ak si si istý menej ako na 60 %, daj null
   a match_confidence pod 0.6. Pri účtenke skús odhadnúť miesto z adresy obchodu alebo poznámky, inak null.
-- place_hint: adresa odberného miesta alebo iný text, ktorý prezrádza miesto.
-- summary: jedna slovenská veta pre používateľa, napr. "ZSE, vyúčtovanie elektriny 1.1.–31.12.2025, 612,40 € (nedoplatok 48,10 €)".
+- place_hint: adresa odberného miesta („Miesto spotreby“, „Location“) alebo iný text, ktorý prezrádza miesto.
+- summary: jedna slovenská veta pre používateľa, napr. "ZSE, vyúčtovanie elektriny 1.9.2025–31.8.2026,
+  1 873,37 € (nedoplatok 579,09 €)" alebo "UPC, internet 10/2026–3/2027, 89,70 €".
 """
-
 
 def _image_block(path: Path, mime: str) -> dict:
     import warnings

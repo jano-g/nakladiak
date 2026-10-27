@@ -338,7 +338,8 @@ def _invoice_out(i: dict | None) -> dict | None:
         return None
     return {k: i[k] for k in ("id", "document_id", "service_id", "supplier", "number", "kind", "issued_at", "period_from", "period_to",
                               "due_at", "total", "to_pay", "advances", "currency", "consumption", "unit", "unit_price",
-                              "variable_symbol", "paid_at")}
+                              "variable_symbol", "paid_at", "generation_kwh", "generation_amount", "generation_fee",
+                              "advance_amount", "advance_months", "advance_from")}
 
 
 def _costs_rows(where: str, params) -> list[dict]:
