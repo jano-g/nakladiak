@@ -149,7 +149,7 @@ def bootstrap_users() -> None:
         return
     a = config.bootstrap_admin()
     if not a["username"] or len(a["password"]) < 8:
-        raise RuntimeError("Prvý štart: v .env musí byť ADMIN_USERNAME a ADMIN_PASSWORD (aspoň 8 znakov).")
+        raise RuntimeError("Prvý štart: v .env musí byť ADMIN_PASSWORD (aspoň 8 znakov).")
     with db.tx():
         db.run("INSERT INTO users(username,name,email,password_hash,is_admin,created_at) VALUES(?,?,?,?,1,?)",
                (a["username"], a["name"], a["email"], hash_password(a["password"]), db.now_iso()))

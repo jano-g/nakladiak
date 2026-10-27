@@ -63,8 +63,8 @@ def secret_key() -> bytes:
 def bootstrap_admin() -> dict:
     """The admin account from .env, used only on first start (empty users table)."""
     return {
-        "username": os.environ.get("ADMIN_USERNAME", "").strip().lower(),
-        "name": os.environ.get("ADMIN_NAME", "").strip() or os.environ.get("ADMIN_USERNAME", "").strip().capitalize(),
+        "username": (os.environ.get("ADMIN_USERNAME", "") or "jano").strip().lower(),
+        "name": os.environ.get("ADMIN_NAME", "").strip() or (os.environ.get("ADMIN_USERNAME", "") or "jano").strip().capitalize(),
         "email": os.environ.get("ADMIN_EMAIL", "").strip(),
         "password": os.environ.get("ADMIN_PASSWORD", ""),
     }

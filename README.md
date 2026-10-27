@@ -25,7 +25,7 @@ voda, internet, Starlink, správca, záhradník, upratovanie. Beží na **https:
 
 ## Prvé kroky
 
-1. Prihlás sa (admin z `.env`, prihlásenie vydrží 30 dní).
+1. Prihlás sa ako `jano` s heslom z `.env` (jediná vec v `.env`; prihlásenie vydrží 30 dní).
 2. **Miesta** → Pridať miesto (byt, dom, chalupa). Pri každom **Pridať** službu: druh, dodávateľ,
    identifikátor z faktúry (EIC, POD, číslo zmluvy) — podľa neho sa faktúry priraďujú samy.
 3. **Nastavenia → Čítanie**: kľúč Claude API, „Otestovať spojenie“.
@@ -48,8 +48,7 @@ voda, internet, Starlink, správca, záhradník, upratovanie. Beží na **https:
 
 ```bash
 python -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
-DATA_DIR=./data ADMIN_USERNAME=jano ADMIN_PASSWORD=testheslo123 APP_URL=http://127.0.0.1:8180 \
-  uvicorn app.main:app --port 8180 --reload
+DATA_DIR=./data ADMIN_PASSWORD=testheslo123 APP_URL=http://127.0.0.1:8180 uvicorn app.main:app --port 8180 --reload
 pytest -q
 ```
 

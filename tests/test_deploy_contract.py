@@ -27,15 +27,14 @@ def test_dockerfile_runs_as_non_root_with_healthcheck():
     assert f"playwright=={base}" in req, "playwright pin must match the base image"
 
 
-def test_env_example_lists_every_overridable_key_and_new_site_keys():
-    from app import settings
+def test_env_example_holds_only_the_admin_password_and_new_site_keys():
+    """Jano's rule (2026-10-27): .env carries the admin password and what new-site.sh/compose need;
+    every other setting lives in Nastavenia (DB)."""
     env = (ROOT / ".env.example").read_text()
-    for key, (env_var, _d) in settings.OVERRIDABLE.items():
-        assert re.search(rf"^{env_var}=", env, re.M), f"{env_var} missing from .env.example"
-    assert env.lstrip("#\n -").startswith("-") or True
+    keys = re.findall(r"^([A-Z_]+)=", env, re.M)
+    assert keys == ["APP_URL", "APP_PORT", "APP_BIND", "ADMIN_PASSWORD"], keys
     assert re.search(rf"^APP_URL=https://{DOMAIN}$", env, re.M)
     assert re.search(rf"^APP_PORT={PORT}$", env, re.M) and re.search(r"^APP_BIND=127\.0\.0\.1$", env, re.M)
-    assert re.search(r"^SECRET_KEY=$", env, re.M)
 
 
 def test_gitignore_protects_secrets():

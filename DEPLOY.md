@@ -14,12 +14,10 @@ git clone git@github.com:jano-g/nakladiak.git /opt/nakladiak
 ```bash
 cd /opt/nakladiak && cp .env.example .env && chmod 600 .env && nano .env
 ```
-V `.env` vyplň aspoň:
-- `APP_URL=https://nak.gordulic.sk` (už je), `APP_PORT=8180`, `APP_BIND=127.0.0.1` (nechaj)
-- `ADMIN_USERNAME`, `ADMIN_NAME`, `ADMIN_EMAIL`, **`ADMIN_PASSWORD` aspoň 8 znakov** — použije sa len pri prvom štarte
-- `SECRET_KEY` nechaj prázdny (vygeneruje sa do `/data/secret.key`, deploy nikoho neodhlási)
-- `ALERT_NTFY_TOPIC` — hodnota z `/etc/web-healthcheck.env` (chyby appky na ntfy)
-- `ANTHROPIC_API_KEY`, IMAP, ZSD a SMTP môžeš vyplniť aj neskôr v appke (Nastavenia); hodnoty z `.env` sú základ, DB vyhráva.
+V `.env` vyplň len **`ADMIN_PASSWORD`** (aspoň 8 znakov; prihlasovacie meno `jano`, použije sa len pri prvom
+štarte). `APP_URL`, `APP_PORT`, `APP_BIND` sú už správne. Všetko ostatné (Claude API, schránka, ZSD, SMTP, ntfy
+vrátane témy pre chyby appky, pripomienky) nastavíš v appke v Nastaveniach. Podpisový kľúč cookies sa
+vygeneruje sám do `/data/secret.key`, takže deploy nikoho neodhlási.
 
 ## 3. Štart
 ```bash
@@ -49,7 +47,8 @@ Over: `curl -sI https://nak.gordulic.sk/ | head -1` → `HTTP/2 303` (presmerova
 ## 5. Prvé spustenie v prehliadači
 1. https://nak.gordulic.sk → prihlásenie admina.
 2. **Nastavenia → Čítanie**: kľúč Claude API → „Otestovať spojenie“.
-3. **Nastavenia → Notifikácie**: „Poslať skúšobnú notifikáciu“ (téma chýb). **Profil**: vlastná ntfy téma + skúšobná.
+3. **Nastavenia → Notifikácie**: téma pre chyby appky = hodnota z `/etc/web-healthcheck.env` → „Poslať skúšobnú notifikáciu“.
+   **Profil**: vlastná ntfy téma + skúšobná.
 4. **Miesta**: pridaj byt / dom / chalupu a k nim služby (dodávateľ + identifikátor z faktúry).
 5. **Nahrať účet**: prvá faktúra; potvrď priradenie, ak sa appka opýta.
 6. **Nastavenia → Schránka**: IMAP schránky na účty → „Otestovať prihlásenie“ → „Prečítať schránku teraz“.
@@ -91,7 +90,7 @@ cd /opt/nakladiak && git pull && docker compose up -d --build
 | Symptóm | Príčina / riešenie |
 |---|---|
 | `env file /opt/nakladiak/.env not found` | krok 2 |
-| Kontajner padá s „ADMIN_USERNAME a ADMIN_PASSWORD (aspoň 8 znakov)“ | doplň admina v `.env`, `docker compose up -d` |
+| Kontajner padá s „ADMIN_PASSWORD (aspoň 8 znakov)“ | doplň heslo v `.env`, `docker compose up -d` |
 | Login vždy odmietnutý | heslo z `.env` platí len pri prvom štarte; `app.cli set-password` |
 | Dokument ostáva „čaká v rade“ / chyba „Chýba kľúč Claude API“ | Nastavenia → Čítanie, kľúč + test |
 | Dokument „chyba“ 4× | otvor ho, „Prečítať znova“ s poznámkou; limit API alebo nečitateľný sken |

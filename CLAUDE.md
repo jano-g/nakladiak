@@ -15,7 +15,9 @@ výpis spáruje s faktúrami, ZSD diportal dodáva dennú spotrebu elektriny. Pr
 - Doména: `services/documents.py` (uloženie, pipeline, matching, review), `services/extract.py` (Claude,
   štruktúrovaný výstup `SCHEMA`), `services/bank.py` (výpisy, pravidlá, párovanie faktúr), `services/costs.py`
   (dashboard, odhady), `services/mailbox.py` (IMAP), `connectors/zsd.py` + `zsd_fetch.py` (subprocess, Playwright).
-- `.env` je základ, `settings.OVERRIDABLE` prepísateľné v Nastaveniach (DB vyhráva); `SECRET_KEYS` sa nevracajú do UI.
+- **`.env` = len `ADMIN_PASSWORD` + `APP_URL`/`APP_PORT`/`APP_BIND`** (Janovo pravidlo 2026-10-27, platí pre všetky
+  appky). Všetko ostatné sa nastavuje v Nastaveniach (`settings.OVERRIDABLE`, DB); env názvy ostávajú len ako
+  nedokumentovaný fallback. `SECRET_KEYS` sa nevracajú do UI. Test `test_deploy_contract` to pinuje.
 
 ## Konvencie
 - UI po slovensky, krátko, druhá osoba; mená neskloňuj. Odhad = `≈` + tlmená farba, faktúra = plná suma.
@@ -37,7 +39,7 @@ výpis spáruje s faktúrami, ZSD diportal dodáva dennú spotrebu elektriny. Pr
 ## Lokálny vývoj
 ```bash
 cp .env.example .env    # ADMIN_PASSWORD aspoň 8 znakov
-DATA_DIR=./data ADMIN_USERNAME=jano ADMIN_PASSWORD=testheslo123 APP_URL=http://127.0.0.1:8180 uvicorn app.main:app --port 8180 --reload
+DATA_DIR=./data ADMIN_PASSWORD=testheslo123 APP_URL=http://127.0.0.1:8180 uvicorn app.main:app --port 8180 --reload
 pytest -q               # 37+ testov, izolovaná DB v tmp
 ```
 Screenshoty: `scripts/screenshots.py` zo skillu appka-builder (Chromium `/opt/pw-browsers/chromium`).
